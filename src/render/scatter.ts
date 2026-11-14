@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, CELL, GRID_COLS, HALF_D, HALF_W } from '../core/constants';
+import { CELL, GRID_COLS, HALF_D, HALF_W } from '../core/constants';
 import type { GridCell, PowerNode } from '../core/types';
 import type { ModelLib } from './modelLib';
 import { bake } from './batch';
@@ -37,15 +37,12 @@ export class Scatter {
       const x0 = c.col * CELL - HALF_W;
       const z0 = c.row * CELL - HALF_D;
       if (c.terrain === 'park') {
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 6; i++) {
           const hx = cellHash(c.id, i * 3 + 1);
           const hz = cellHash(c.id, i * 3 + 2);
           const hv = cellHash(c.id, i * 3 + 3);
           const x = x0 + 1.8 + hx * (CELL - 3.6);
           const z = z0 + 1.8 + hz * (CELL - 3.6);
-          const onWalk = (c.col % BLOCK === Math.floor(BLOCK / 2) && Math.abs(x - (x0 + CELL / 2)) < 1.8)
-            || (c.row % BLOCK === Math.floor(BLOCK / 2) && Math.abs(z - (z0 + CELL / 2)) < 1.8);
-          if (onWalk) continue;
           if (nearPole(x, z, 2)) continue;
           place(trees[Math.floor(hv * 3)], x, LOT_Y, z, hv * 6.28, 0.85 + hx * 0.5);
         }

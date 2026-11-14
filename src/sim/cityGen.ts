@@ -108,10 +108,13 @@ export function generateCity(seed: number): { cells: GridCell[]; buildings: Reco
     return false;
   };
   const parkBlocks: Array<[number, number]> = [];
-  const parkTargets: Array<[number, number]> = [[2, 2], [6, 2], [2, 5], [6, 5], [1, 4], [6, 3]];
-  for (const [bc, br] of parkTargets) {
-    if (parkBlocks.length >= 4) break;
+  const nParks = rng.int(3, 5);
+  for (let tries = 0; tries < 200 && parkBlocks.length < nParks; tries++) {
+    const bc = rng.int(0, BLOCKS - 1);
+    const br = rng.int(1, BLOCKS - 2);
     if (blockHasRiver(bc, br)) continue;
+    // keep blocks near the map edge for generators free, and parks apart from each other
+    if (bc === 0 || bc === BLOCKS - 1) continue;
     if (parkBlocks.some(([a, b]) => Math.abs(a - bc) <= 1 && Math.abs(b - br) <= 1)) continue;
     parkBlocks.push([bc, br]);
   }
@@ -267,15 +270,11 @@ export function generateCity(seed: number): { cells: GridCell[]; buildings: Reco
     place('telecom', t, i % 2);
   }
 
-  // Housing follows a deliberate city-to-suburb transition: compact walk-ups and
-  // townhouses near the river/central bridge, detached homes toward the edge.
+  // houses: ~65% of remaining land cells
   for (let r = 0; r < GRID_ROWS; r++) {
     for (let c = 0; c < GRID_COLS; c++) {
       if (!isFree(c, r)) continue;
-      const centerDist = Math.hypot(c + 0.5 - 24, r + 0.5 - 24);
-      const riverDistHere = riverDist[cellId(c, r)];
-      const density = centerDist < 10 ? 0.84 : centerDist < 18 ? 0.72 : 0.58;
-      if (!rng.chance(density)) continue;
+      if (!rng.chance(0.65)) continue;
       const bc = Math.min(BLOCKS - 1, Math.floor(c / BLOCK));
       const br = Math.min(BLOCKS - 1, Math.floor(r / BLOCK));
       const d = sideDists(bc, br, c, r, 1, 1);
@@ -283,11 +282,7 @@ export function generateCity(seed: number): { cells: GridCell[]; buildings: Reco
       const opts: Rotation[] = [];
       for (let k = 0 as Rotation; k < 4; k = (k + 1) as Rotation) if (d[k] === m) opts.push(k);
       const rot = rng.pick(opts);
-      let variant: number;
-      if (centerDist < 10 && rng.chance(0.62)) variant = 4;
-      else if (centerDist < 18 && riverDistHere < 6 && rng.chance(0.55)) variant = 3;
-      else variant = rng.int(0, 3);
-      place('house', { col: c, row: r, ew: 1, ed: 1, rot, cx: c + 0.5, cy: r + 0.5, bc, br }, variant);
+      place('house', { col: c, row: r, ew: 1, ed: 1, rot, cx: c + 0.5, cy: r + 0.5, bc, br }, rng.int(0, 3));
     }
   }
 
@@ -307,13 +302,12 @@ export function generateCity(seed: number): { cells: GridCell[]; buildings: Reco
     Eastbank: ['Eastbank Memorial Hospital', 'Eastview Regional Hospital', 'Hillside Hospital'],
   };
   const schoolNames = ['Oakridge', 'Maple Grove', 'Hillcrest', 'Lakeview', 'Cedar Park', 'Willow Creek'];
-  const streetNames = ['Maple Avenue', 'Oak Street', 'Pine Road', 'Cedar Street', 'River Drive', 'Park Avenue', 'Union Street', 'Broadway'];
   let si = 0;
   let wi = 0;
   let ei = 0;
   let subi = 0;
   let ti = 0;
-  let ai = 0;
+  let hi = 0;
   for (const b of placed) {
     const dn = dist(b);
     const bank = dn.split(' ')[0];
@@ -344,15 +338,7 @@ export function generateCity(seed: number): { cells: GridCell[]; buildings: Reco
         b.name = `Tower T-${String(++ti).padStart(2, '0')}`;
         break;
       case 'house':
-        if (b.variant === 4) {
-          const street = streetNames[Math.floor(b.col / BLOCK + b.row / BLOCK) % streetNames.length];
-          b.name = `${street} Walk-Up Apartments ${++ai}`;
-        } else {
-          const streetBlock = b.rotation % 2 === 0 ? Math.floor(b.row / BLOCK) : Math.floor(b.col / BLOCK);
-          const along = b.rotation % 2 === 0 ? b.col : b.row;
-          const address = 100 + Math.floor(along / BLOCK) * 100 + (along % BLOCK) * 2;
-          b.name = uniq(`${address} ${streetNames[streetBlock % streetNames.length]}`);
-        }
+        b.name = `House ${++hi}`;
         break;
     }
   }

@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { BLOCK, CELL, GRID_COLS, GRID_ROWS, HALF_D, HALF_W } from '../core/constants';
 import type { GridCell, Terrain } from '../core/types';
 import { COLORS, MAT } from './palette';
-import { makeGrassDetailTexture } from './terrainTexture';
 
 /** Top surface height of each terrain type (m). Buildings stand on LOT_Y. */
 export const LOT_Y = 0.18;
@@ -16,7 +15,6 @@ class Mesher {
   nor: number[] = [];
   col: number[] = [];
   idx: number[] = [];
-  uv: number[] = [];
   private cross = new THREE.Vector3();
   private ab = new THREE.Vector3();
   private ac = new THREE.Vector3();
@@ -31,7 +29,6 @@ class Mesher {
       this.pos.push(p[0], p[1], p[2]);
       this.nor.push(n[0], n[1], n[2]);
       this.col.push(color.r, color.g, color.b);
-      this.uv.push(p[0] / 24, p[2] / 24);
     }
     this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
@@ -53,7 +50,6 @@ class Mesher {
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
     g.setIndex(this.idx);
     return g;
   }
@@ -67,8 +63,8 @@ const hash = (a: number, b: number): number => {
 export { hash as cellHash };
 
 const C = {
-  land: new THREE.Color(0x71835a),
-  park: new THREE.Color(0x658d4d),
+  land: new THREE.Color(COLORS.sand),
+  park: new THREE.Color(0x7acd48),
   road: new THREE.Color(0x353730),
   bridge: new THREE.Color(0xcfc8b4),
   river: new THREE.Color(COLORS.water),
@@ -76,10 +72,8 @@ const C = {
   side: new THREE.Color(0xd2c6a2),
   bank: new THREE.Color(0xb59b6a),
   dash: new THREE.Color(0xf3efdc),
-  centerline: new THREE.Color(0xffce4a),
   rail: new THREE.Color(COLORS.ink),
   curb: new THREE.Color(0xf0e8cc),
-  parkPath: new THREE.Color(0xbab39f),
 };
 
 export interface Ground {
@@ -90,7 +84,6 @@ export interface Ground {
 
 export function buildGround(cells: GridCell[]): Ground {
   const m = new Mesher();
-  const grass = new Mesher();
   const at = (c: number, r: number): GridCell | undefined =>
     c < 0 || r < 0 || c >= GRID_COLS || r >= GRID_ROWS ? undefined : cells[r * GRID_COLS + c];
   const roadLike = (c: GridCell | undefined) => !!c && (c.terrain === 'road' || c.terrain === 'bridge');
@@ -112,7 +105,6 @@ export function buildGround(cells: GridCell[]): Ground {
     tmp.copy(base).offsetHSL(0, 0, terrain === 'road' || terrain === 'river' ? jitter * 0.5 : jitter);
     if (terrain === 'river' && (col + row) % 3 === 0) tmp.copy(C.riverLight);
     m.top(x0, z0, x1, z1, y, tmp);
-    if (terrain === 'land' || terrain === 'park') grass.top(x0, z0, x1, z1, y + 0.018, tmp);
 
     // side walls toward lower neighbours / board edge
     const nbs: Array<[number, number, V3, V3, V3, V3, V3]> = [
@@ -165,28 +157,10 @@ export function buildGround(cells: GridCell[]): Ground {
       const yy = y + 0.035;
       const cx = (x0 + x1) / 2;
       const cz = (z0 + z1) / 2;
-      const arterial = col === GRID_COLS / 2 || row === GRID_ROWS / 2;
       if (hz && !vt) {
-        if (arterial) {
-          // Central two-way boulevard: double yellow centreline and broken white lane guides.
-          m.top(x0, cz - 0.14, x1, cz - 0.06, yy, C.centerline);
-          m.top(x0, cz + 0.06, x1, cz + 0.14, yy, C.centerline);
-          for (const s of [1.2, 7.2]) for (const side of [-1, 1]) {
-            m.top(x0 + s, cz + side * 3.1 - 0.1, x0 + s + 3.6, cz + side * 3.1 + 0.1, yy, C.dash);
-          }
-        } else {
-          for (const s of [1.2, 7.2]) m.top(x0 + s, cz - 0.18, x0 + s + 3.6, cz + 0.18, yy, C.dash);
-        }
+        for (const s of [1.2, 7.2]) m.top(x0 + s, cz - 0.18, x0 + s + 3.6, cz + 0.18, yy, C.dash);
       } else if (vt && !hz) {
-        if (arterial) {
-          m.top(cx - 0.14, z0, cx - 0.06, z1, yy, C.centerline);
-          m.top(cx + 0.06, z0, cx + 0.14, z1, yy, C.centerline);
-          for (const s of [1.2, 7.2]) for (const side of [-1, 1]) {
-            m.top(cx + side * 3.1 - 0.1, z0 + s, cx + side * 3.1 + 0.1, z0 + s + 3.6, yy, C.dash);
-          }
-        } else {
-          for (const s of [1.2, 7.2]) m.top(cx - 0.18, z0 + s, cx + 0.18, z0 + s + 3.6, yy, C.dash);
-        }
+        for (const s of [1.2, 7.2]) m.top(cx - 0.18, z0 + s, cx + 0.18, z0 + s + 3.6, yy, C.dash);
       } else if (hz && vt && terrain === 'road') {
         // zebra crossings on the four arms of an intersection
         for (let i = 0; i < 5; i++) {
@@ -208,13 +182,6 @@ export function buildGround(cells: GridCell[]): Ground {
       if (roadLike(at(col, row - 1))) m.top(x0, z0, x1, z0 + w, yy, C.curb);
       if (roadLike(at(col, row + 1))) m.top(x0, z1 - w, x1, z1, yy, C.curb);
     }
-
-    // Quiet paved walks cross each reserved park block through its centre.
-    if (terrain === 'park') {
-      const pathWidth = 2.2;
-      if (col % BLOCK === Math.floor(BLOCK / 2)) m.top((x0 + x1 - pathWidth) / 2, z0, (x0 + x1 + pathWidth) / 2, z1, y + 0.035, C.parkPath);
-      if (row % BLOCK === Math.floor(BLOCK / 2)) m.top(x0, (z0 + z1 - pathWidth) / 2, x1, (z0 + z1 + pathWidth) / 2, y + 0.035, C.parkPath);
-    }
   }
 
   const geo = m.build();
@@ -225,39 +192,22 @@ export function buildGround(cells: GridCell[]): Ground {
   mesh.receiveShadow = true;
   mesh.castShadow = false;
 
-  const grassGeo = grass.build();
-  const grassMat = MAT.grass.clone() as THREE.MeshToonMaterial;
-  grassMat.color.set(0xffffff);
-  grassMat.vertexColors = true;
-  const grassTexture = makeGrassDetailTexture();
-  grassMat.map = grassTexture;
-  grassMat.needsUpdate = true;
-  const grassMesh = new THREE.Mesh(grassGeo, grassMat);
-  grassMesh.receiveShadow = true;
-  grassMesh.castShadow = false;
-
   const lg = new THREE.BufferGeometry();
   lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
   const lmat = new THREE.LineBasicMaterial({ color: COLORS.ink, transparent: true, opacity: 0.55 });
   const outline = new THREE.LineSegments(lg, lmat);
 
   const group = new THREE.Group();
-  group.add(mesh, grassMesh, outline);
+  group.add(mesh, outline);
   return {
     group,
     setFade(o: number) {
       mat.transparent = o < 0.999;
       mat.opacity = o;
       mat.needsUpdate = true;
-      grassMat.transparent = o < 0.999;
-      grassMat.opacity = o;
-      grassMat.needsUpdate = true;
     },
     dispose() {
       geo.dispose();
-      grassGeo.dispose();
-      grassTexture.dispose();
-      grassMat.dispose();
       mat.dispose();
       lg.dispose();
       lmat.dispose();
