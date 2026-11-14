@@ -283,15 +283,21 @@ function site(g: THREE.Object3D): void {
     cyl(g, 0.16, 0.16, 0.1, 'ink', x, B + 0.8, z, 10);
   }
 
-  // flagpole with a red flag and white cross
+  // American flag: alternating stripes, blue canton and small white stars.
   const fx = -9.2;
   const fz = -4.0;
   box(g, 0.6, 0.2, 0.6, 'concrete', fx, B, fz);
   cyl(g, 0.06, 0.06, 7.0, 'steel', fx, B + 0.2, fz, 8);
   sphere(g, 0.1, 'steel', fx, B + 7.25, fz, 8);
-  box(g, 1.4, 0.9, 0.04, 'red', fx + 0.76, B + 5.9, fz);
-  box(g, 0.16, 0.6, 0.06, 'wallWhite', fx + 0.76, B + 6.05, fz);
-  box(g, 0.9, 0.16, 0.06, 'wallWhite', fx + 0.76, B + 6.27, fz);
+  for (let stripe = 0; stripe < 7; stripe++) {
+    box(g, 1.4, 0.9 / 7, 0.04, stripe % 2 === 0 ? 'red' : 'wallWhite', fx + 0.76, B + 5.9 + stripe * (0.9 / 7), fz);
+  }
+  box(g, 0.58, 0.45, 0.06, 'blue', fx + 0.29, B + 6.35, fz);
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      sphere(g, 0.035, 'wallWhite', fx + 0.12 + col * 0.18, B + 6.42 + row * 0.13, fz + 0.04, 6);
+    }
+  }
 
   // fuel island with a canopy and a hose
   const px = -9.8;
