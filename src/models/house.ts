@@ -7,7 +7,7 @@ import {
 } from './kit';
 import { MAT, type MatName } from '../render/palette';
 
-export const VARIANTS = 4;
+export const VARIANTS = 5;
 
 type Mat = MatName;
 
@@ -50,6 +50,38 @@ function windowOn(
     panel(g, face, surf, u, y, 0.07, h, 0.06, 0.17, 'ink'); // mullion
     panel(g, face, surf, u, y, w, 0.07, 0.06, 0.17, 'ink'); // transom
     panel(g, face, surf, u, y - h / 2 - 0.17, w + 0.3, 0.1, 0.22, 0.1, 'concrete'); // sill
+  }
+}
+
+/** Closely spaced lap siding courses, inset behind the window and door trim. */
+function clapboard(g: THREE.Group, face: Face, surf: number, u0: number, u1: number, y0: number, y1: number): void {
+  const width = u1 - u0;
+  for (let y = y0 + 0.28; y < y1 - 0.12; y += 0.38) {
+    panel(g, face, surf, (u0 + u1) / 2, y, width, 0.035, 0.07, 0.005, 'siding');
+  }
+}
+
+/** Raised asphalt shingle courses on both pitches of a gable roof. */
+function shingleCourses(g: THREE.Group, ridgeX: number, ridgeZ: number, eaveY: number, halfDepth: number, rise: number, width: number): void {
+  const pitch = Math.atan2(rise, halfDepth);
+  for (const side of [-1, 1] as const) {
+    for (let run = 0.48; run < halfDepth - 0.08; run += 0.52) {
+      const z = ridgeZ + side * run;
+      const y = eaveY + rise * (1 - run / halfDepth);
+      const course = box(g, width, 0.035, 0.095, 'roofShingle', ridgeX, y + 0.018, z);
+      course.rotation.x = side * pitch;
+    }
+  }
+}
+
+/** Paired louvered shutters for the narrow double-hung windows common on US homes. */
+function shutters(g: THREE.Group, face: Face, surf: number, u: number, y: number, w: number, h: number): void {
+  for (const side of [-1, 1]) {
+    const x = u + side * (w / 2 + 0.24);
+    panel(g, face, surf, x, y, 0.28, h + 0.12, 0.07, 0.035, 'roofShingle');
+    for (let k = 0; k < 4; k++) {
+      panel(g, face, surf, x, y - h * 0.34 + k * (h * 0.22), 0.22, 0.035, 0.05, 0.08, 'wallWhite');
+    }
   }
 }
 
@@ -154,8 +186,8 @@ function solarPanel(g: THREE.Group, x: number, z: number, base: number): void {
 // ---- variant 0: gable cottage, one storey ------------------------------------
 
 function cottage(g: THREE.Group, rnd: () => number): THREE.Vector3 {
-  const wall = pickFrom<Mat>(rnd, ['wallCream', 'wallWhite', 'wallYellow', 'wallPink']);
-  const roof = pickFrom<Mat>(rnd, ['roofCoral', 'roofInk', 'roofGreen']);
+  const wall = pickFrom<Mat>(rnd, ['wallCream', 'wallWhite', 'wallSage', 'wallBlueGray']);
+  const roof = pickFrom<Mat>(rnd, ['roofShingle', 'roofInk', 'roofBlue']);
   const doorLeaf = pickFrom<Mat>(rnd, ['wood', 'blue', 'green', 'red']);
   const eave = T1;
 
@@ -164,6 +196,14 @@ function cottage(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   box(g, 7.3, FL - GROUND, 6.3, 'concrete', 0, GROUND, -1);
   box(g, 7, STOREY, 6, wall, 0, FL, -1);
   gableRoof(g, 7, 6, 2.4, roof, 0, eave, -1, 0.4);
+  for (const [face, surf, a, b] of [['+z', 2, -3.4, 3.4], ['-z', -4, -3.4, 3.4], ['+x', 3.5, -4, 2], ['-x', -3.5, -4, 2]] as const) {
+    clapboard(g, face, surf, a, b, FL, eave);
+  }
+  shingleCourses(g, 0, -1, eave, 3.4, 2.4, 7.5);
+  // White corner boards, rake trim, fascia and the projecting Craftsman porch beam.
+  for (const x of [-3.42, 3.42]) box(g, 0.18, STOREY, 0.12, 'wallWhite', x, FL, 2.04);
+  box(g, 7.8, 0.18, 0.18, 'wallWhite', 0, eave - 0.12, 2.36);
+  box(g, 7.8, 0.18, 0.18, 'wallWhite', 0, eave - 0.12, -4.36);
 
   // chimney on the back slope, rising above the ridge
   box(g, 0.8, 2.5, 0.8, 'concrete', 2.0, 4.3, -1.6);
@@ -176,8 +216,9 @@ function cottage(g: THREE.Group, rnd: () => number): THREE.Vector3 {
 
   // front porch: raised deck, two posts, flat roof, step down to the path
   box(g, 3.2, FL - GROUND, 1.8, 'wood', 0, GROUND, 2.9);
-  box(g, 0.16, 2.63, 0.16, 'wood', -1.5, FL, 3.6);
-  box(g, 0.16, 2.63, 0.16, 'wood', 1.5, FL, 3.6);
+  box(g, 0.34, 2.63, 0.34, 'wallWhite', -1.5, FL, 3.6);
+  box(g, 0.34, 2.63, 0.34, 'wallWhite', 1.5, FL, 3.6);
+  box(g, 3.8, 0.18, 0.18, 'wallWhite', 0, 3.0, 4.05);
   box(g, 3.6, 0.18, 2.3, roof, 0, 3.05, 2.9);
   box(g, 1.6, 0.15, 0.45, 'concrete', 0, GROUND, 4.025);
 
@@ -185,6 +226,8 @@ function cottage(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   doorOn(g, '+z', 2.0, 0, FL, 1.0, 2.1, doorLeaf);
   windowOn(g, '+z', 2.0, -2.1, FL + 1.5, 1.2, 1.2);
   windowOn(g, '+z', 2.0, 2.1, FL + 1.5, 1.2, 1.2);
+  shutters(g, '+z', 2.0, -2.1, FL + 1.5, 1.2, 1.2);
+  shutters(g, '+z', 2.0, 2.1, FL + 1.5, 1.2, 1.2);
   windowOn(g, '+x', 3.5, -1.0, FL + 1.5, 1.2, 1.2);
   windowOn(g, '-x', -3.5, -1.0, FL + 1.5, 1.2, 1.2);
 
@@ -202,13 +245,16 @@ function cottage(g: THREE.Group, rnd: () => number): THREE.Vector3 {
 // ---- variant 1: two-storey family house, hip roof ----------------------------
 
 function familyHouse(g: THREE.Group, rnd: () => number): THREE.Vector3 {
-  const wall = pickFrom<Mat>(rnd, ['wallWhite', 'wallCream', 'wallLilac', 'wallTeal']);
-  const roof = pickFrom<Mat>(rnd, ['roofBlue', 'roofInk', 'roofCoral']);
+  const wall = pickFrom<Mat>(rnd, ['wallWhite', 'wallCream', 'wallSage', 'wallBlueGray']);
+  const roof = pickFrom<Mat>(rnd, ['roofShingle', 'roofBlue', 'roofInk']);
   const doorLeaf = pickFrom<Mat>(rnd, ['wood', 'red', 'ink', 'green']);
 
   lotSlab(g);
   box(g, 7.6, FL - GROUND, 6.6, 'concrete', 0, GROUND, -1.2); // plinth
   box(g, 7.4, 2 * STOREY, 6.4, wall, 0, FL, -1.2); // z -4.4..2.0
+  for (const [face, surf, a, b] of [['+z', 2, -3.5, 3.5], ['-z', -4.4, -3.5, 3.5], ['+x', 3.7, -4.4, 2], ['-x', -3.7, -4.4, 2]] as const) {
+    clapboard(g, face, surf, a, b, FL, TOP);
+  }
   // string courses at the first-floor line, all round
   box(g, 7.6, 0.14, 0.12, 'concrete', 0, T1 - 0.07, 2.06);
   box(g, 7.6, 0.14, 0.12, 'concrete', 0, T1 - 0.07, -4.46);
@@ -220,12 +266,16 @@ function familyHouse(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   doorOn(g, '+z', 2.0, -1.0, FL, 1.0, 2.1, doorLeaf);
   windowOn(g, '+z', 2.0, -2.9, FL + 1.5, 1.2, 1.2);
   windowOn(g, '+z', 2.0, 2.4, FL + 1.5, 1.2, 1.2);
+  shutters(g, '+z', 2.0, -2.9, FL + 1.5, 1.2, 1.2);
+  shutters(g, '+z', 2.0, 2.4, FL + 1.5, 1.2, 1.2);
   box(g, 1.6, FL - GROUND, 0.5, 'concrete', -1.0, GROUND, 2.25); // door step
 
   // first floor: balcony door centred, windows either side, balcony with railing on the front
   doorOn(g, '+z', 2.0, 0, T1, 1.0, 2.1, doorLeaf);
   windowOn(g, '+z', 2.0, -2.5, T1 + 1.5, 1.2, 1.2);
   windowOn(g, '+z', 2.0, 2.5, T1 + 1.5, 1.2, 1.2);
+  shutters(g, '+z', 2.0, -2.5, T1 + 1.5, 1.2, 1.2);
+  shutters(g, '+z', 2.0, 2.5, T1 + 1.5, 1.2, 1.2);
   box(g, 4.8, 0.2, 1.0, 'concrete', 0, T1 - 0.2, 2.5); // slab z 2..3
   box(g, 0.14, 0.3, 0.75, 'steelDark', -2.2, T1 - 0.5, 2.4); // corbels
   box(g, 0.14, 0.3, 0.75, 'steelDark', 2.2, T1 - 0.5, 2.4);
@@ -234,8 +284,12 @@ function familyHouse(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   // side (+X): garage door at ground level, windows above and beside it
   panel(g, '+x', 3.7, -0.9, FL + 1.1, 2.8, 2.4, 0.04, 0.02, 'ink'); // frame
   panel(g, '+x', 3.7, -0.9, FL + 1.1, 2.6, 2.2, 0.08, 0.06, 'steel'); // door leaf
-  panel(g, '+x', 3.7, -0.9, FL + 0.8, 2.6, 0.05, 0.05, 0.1, 'ink'); // ribs
-  panel(g, '+x', 3.7, -0.9, FL + 1.5, 2.6, 0.05, 0.05, 0.1, 'ink');
+  for (let row = 0; row < 4; row++) {
+    panel(g, '+x', 3.7, -0.9, FL + 0.45 + row * 0.48, 2.52, 0.045, 0.05, 0.11, 'steelDark');
+  }
+  for (const u of [-1.75, -1.18, -0.61]) {
+    panel(g, '+x', 3.7, u, FL + 2.05, 0.42, 0.34, 0.05, 0.12, 'glow');
+  }
   box(g, 1.5, 0.03, 2.6, 'concrete', 4.45, GROUND, -0.9); // driveway
   windowOn(g, '+x', 3.7, -3.0, T1 + 1.5, 1.2, 1.2, false);
   windowOn(g, '+x', 3.7, 1.2, FL + 1.5, 1.0, 1.2, false);
@@ -351,13 +405,13 @@ function townUnit(g: THREE.Group, side: -1 | 1, leaf: Mat, canopy: Mat): void {
 
 function townhouses(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   const PAIRS: ReadonlyArray<readonly [Mat, Mat]> = [
-    ['wallPink', 'wallTeal'],
-    ['wallLilac', 'wallYellow'],
-    ['wallBlue', 'wallCream'],
-    ['wallYellow', 'wallLilac'],
+    ['wallSage', 'wallCream'],
+    ['wallBlueGray', 'wallWhite'],
+    ['wallSand', 'wallSage'],
+    ['wallCream', 'wallBlueGray'],
   ];
   const pair = pickFrom<readonly [Mat, Mat]>(rnd, PAIRS);
-  const ROOFS: Mat[] = ['roofCoral', 'roofBlue', 'roofInk', 'roofGreen'];
+  const ROOFS: Mat[] = ['roofShingle', 'roofBlue', 'roofInk'];
   const roofA = pickFrom<Mat>(rnd, ROOFS);
   const roofB = pickFrom<Mat>(rnd, ROOFS.filter((r) => r !== roofA));
   const doorA = pickFrom<Mat>(rnd, ['wood', 'red', 'ink', 'green']);
@@ -372,6 +426,10 @@ function townhouses(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   box(g, 7.5, FL - GROUND, 6.6, 'concrete', 0, GROUND, -1.2);
   box(g, 3.6, 2 * STOREY, 6.4, pair[0], -1.8, FL, -1.2);
   box(g, 3.6, 2 * STOREY, 6.4, pair[1], 1.8, FL, -1.2);
+  clapboard(g, '+z', 2.0, -3.5, 3.5, FL, TOP);
+  clapboard(g, '-z', -4.4, -3.5, 3.5, FL, TOP);
+  clapboard(g, '+x', 3.6, -4.4, 2.0, FL, TOP);
+  clapboard(g, '-x', -3.6, -4.4, 2.0, FL, TOP);
   // one gable roof per unit, ridge along Z (built along X, then turned 90 degrees)
   for (const [cx, rm] of [[-1.8, roofA], [1.8, roofB]] as const) {
     const r = gableRoof(g, 6.4, 3.6, 2.2, rm, cx, TOP, -1.2, 0.3);
@@ -410,6 +468,84 @@ function townhouses(g: THREE.Group, rnd: () => number): THREE.Vector3 {
   return mast(g, -2.0, 6.2, 2.5, 6.9);
 }
 
+// ---- variant 4: American brick walk-up apartment -----------------------------
+
+/** Compact four-storey masonry walk-up used to give the inner districts a real skyline. */
+function walkUp(g: THREE.Group): THREE.Vector3 {
+  const x0 = -4.6;
+  const zf = 4.5;
+  const floors = 4;
+  const floorH = 2.8;
+  const wallY = 0.55;
+  const wallH = floors * floorH;
+
+  lotSlab(g);
+  box(g, 9.4, 0.42, 9.4, 'concrete', 0, GROUND, -0.1); // raised masonry plinth
+  box(g, 9.0, wallH, 8.9, 'brick', 0, wallY, -0.1);
+
+  // Stone water table and restrained floor bands make the masonry read at city scale.
+  box(g, 9.18, 0.28, 0.12, 'concrete', 0, wallY + 0.15, zf + 0.07);
+  box(g, 9.18, 0.16, 0.12, 'wallSand', 0, wallY + floorH - 0.08, zf + 0.07);
+  for (let floor = 2; floor < floors; floor++) {
+    box(g, 9.18, 0.12, 0.12, 'wallSand', 0, wallY + floor * floorH - 0.06, zf + 0.07);
+  }
+
+  // Repeated double-hung windows with stone sills and lintels; a clear entrance bay.
+  const rows = [1, 2, 3, 4];
+  const cols = [-2.9, 0, 2.9];
+  for (const floor of rows) {
+    for (const x of cols) {
+      if (floor === 1 && x === 0) continue;
+      const y = wallY + (floor - 1) * floorH + 1.05;
+      windowOn(g, '+z', zf, x, y, 1.15, 1.35, true);
+      box(g, 1.45, 0.12, 0.2, 'wallSand', x, y - 0.84, zf + 0.14);
+      box(g, 1.42, 0.12, 0.16, 'wallSand', x, y + 0.77, zf + 0.12);
+    }
+  }
+  for (const x of [-1.05, 1.05]) {
+    doorOn(g, '+z', zf, x, wallY, 0.9, 2.25, 'roofShingle');
+    box(g, 1.5, 0.22, 0.8, 'concrete', x, GROUND + 0.36, zf + 0.55);
+    box(g, 1.1, 0.12, 0.3, 'wallWhite', x, wallY + 2.3, zf + 0.4); // shallow entry hood
+  }
+
+  // Side elevations keep the building convincing from all four camera directions.
+  for (const face of ['+x', '-x'] as const) {
+    const surf = face === '+x' ? 4.5 : -4.5;
+    for (const floor of rows) {
+      const y = wallY + (floor - 1) * floorH + 1.05;
+      for (const z of [-2.4, 0.4, 3.1]) windowOn(g, face, surf, z, y, 1.0, 1.25, true);
+    }
+  }
+
+  // Roof cornice, parapet cap, stair bulkhead and screened mechanical equipment.
+  box(g, 9.5, 0.28, 0.25, 'wallWhite', 0, wallY + wallH, zf + 0.02);
+  box(g, 9.5, 0.35, 0.25, 'wallSand', 0, wallY + wallH + 0.28, zf + 0.02);
+  box(g, 9.25, 0.12, 9.15, 'roofShingle', 0, wallY + wallH + 0.63, -0.1);
+  box(g, 2.8, 1.5, 2.4, 'wallSage', -2.6, wallY + wallH + 0.75, -1.2);
+  box(g, 3.2, 0.18, 2.8, 'roofInk', -2.6, wallY + wallH + 2.25, -1.2);
+  for (const x of [-3.4, 3.4]) {
+    box(g, 0.7, 0.8, 0.7, 'steel', x, wallY + wallH + 0.75, -2.4);
+    box(g, 0.84, 0.1, 0.84, 'steelDark', x, wallY + wallH + 1.55, -2.4);
+  }
+
+  // Rear fire escape: stacked landings and ladders belong to the real building, not decoration.
+  for (let floor = 1; floor < floors; floor++) {
+    const y = wallY + floor * floorH;
+    box(g, 2.3, 0.12, 1.1, 'steelDark', 2.5, y, -4.82);
+    railing(g, { x: 1.45, y: y + 0.12, z: -5.25 }, { x: 3.55, y: y + 0.12, z: -5.25 }, 0.82, 'steelDark');
+    for (const x of [1.65, 3.35]) cyl(g, 0.045, 0.045, floorH - 0.15, 'steelDark', x, y - floorH + 0.12, -5.25, 6);
+  }
+  for (let floor = 1; floor < floors - 1; floor++) {
+    const y = wallY + floor * floorH;
+    for (let step = 0; step < 6; step++) {
+      box(g, 0.75, 0.08, 0.28, 'steelDark', 2.5 - step * 0.18, y + step * 0.38, -5.25);
+    }
+  }
+
+  path(g, 0, 4.5, LOT_H, 1.5);
+  return mast(g, -3.7, wallY + wallH + 0.63, 3.9, wallY + wallH + 1.35);
+}
+
 // ---- entry point --------------------------------------------------------------
 
 export const build: ModelBuilder = ({ variant, seed }) => {
@@ -427,8 +563,11 @@ export const build: ModelBuilder = ({ variant, seed }) => {
     case 2:
       port = modernBox(g, rnd);
       break;
-    default:
+    case 3:
       port = townhouses(g, rnd);
+      break;
+    default:
+      port = walkUp(g);
       break;
   }
   setPowerPorts(g, [port]);

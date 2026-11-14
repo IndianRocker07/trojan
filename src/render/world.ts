@@ -9,6 +9,7 @@ import { buildGround, type Ground } from './ground';
 import { Labels } from './labels';
 import { PowerLines } from './lines';
 import { ModelLib } from './modelLib';
+import { buildMountains, type Mountains } from './mountains';
 import { Overlays } from './overlays';
 import { WaterLayer } from './water';
 import { Picker } from './picking';
@@ -57,6 +58,7 @@ export class WorldView extends Emitter<WorldEvents> {
   private ro: ResizeObserver;
 
   private ground: Ground | null = null;
+  private mountains: Mountains | null = null;
   private batch: BuildingBatch | null = null;
   private scatter: Scatter | null = null;
   private lines: PowerLines | null = null;
@@ -104,6 +106,8 @@ export class WorldView extends Emitter<WorldEvents> {
     this.scene.background = CREAM.clone();
     this.scene.fog = new THREE.Fog(CREAM.clone(), 1400, 3600);
     this.scene.add(this.hemi, this.sun, this.sun.target);
+    this.mountains = buildMountains();
+    this.scene.add(this.mountains.group);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(SHADOW_SIZE, SHADOW_SIZE);
     Object.assign(this.sun.shadow.camera, { left: -450, right: 450, top: 450, bottom: -450, near: 10, far: 2800 });
@@ -310,6 +314,8 @@ export class WorldView extends Emitter<WorldEvents> {
     this.renderer.setAnimationLoop(null);
     this.ro.disconnect();
     this.teardown();
+    this.mountains?.dispose();
+    this.mountains = null;
     this.picker.dispose();
     this.labels.dispose();
     this.controls.dispose();
