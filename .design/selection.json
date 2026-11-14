@@ -1,0 +1,24 @@
+{
+  "base": {
+    "slug": "friendly-illustrated",
+    "name": "Friendly Illustrated",
+    "family": "playful",
+    "dir": "library/styles/friendly-illustrated"
+  },
+  "tweaks": {
+    "theme": "default",
+    "accent": null,
+    "density": 1,
+    "motion": 1,
+    "radius": "8px",
+    "fontDisplay": null,
+    "fontBody": null
+  },
+  "borrow": {},
+  "alsoInspiredBy": null,
+  "compared": [],
+  "notes": "",
+  "project": "3D crisis-grid simulator: a city of utilities (hospitals, water, telecom, emergency) on a block grid, power lines, disasters knocking out blocks, live telemetry panels, later multi-agent power negotiation",
+  "savedAt": "2026-11-14T14:10:16",
+  "libraryRoot": "C:\\Users\\cbec\\.claude\\skills\\design-selector\\library"
+}

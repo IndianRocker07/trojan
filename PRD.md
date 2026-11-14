@@ -154,6 +154,14 @@ is defined in the cited SPEC section.
 ### US-1.11 Layers and view toggles
 - AC1 Toggle grid, power flow, labels, status overlay from the left rail and via keys G, F, L; state shown on the control.
 
+### US-1.14 Transmission layers: power (default on) and underground water (on demand)
+*As an operator, I want to see both lifelines, power and water, and how they depend on each other.* (SPEC §4.5, §8.4b)
+- AC1 A floating "Power lines / Water network" pill toggles each layer (keys P, W). Power is ON by default; water is OFF by default.
+- AC2 Power layer: pylons, poles, catenary wires and animated flow pulses (speed ∝ load; orange when overloaded; coral sparks at breaks; no flow downstream of a break). Turning it off hides all of it.
+- AC3 Water layer is an x-ray view: the ground fades to ~35%, and buried mains (under roads) and service pipes (into every lot) appear 2.5 m underground with risers at each pump station. Cyan droplets flow downstream (speed ∝ flow, density ∝ pressure). Unpressurised pipes turn grey; broken pipes show a surface leak. Power dims to 40% while water is on.
+- AC4 Water depends on power: a pump station below ~35% of its power demand loses pressure, downstream consumers report reduced `waterSupplyPct`, and hospitals' urgency rises when water supply falls below 50%.
+- AC5 Pipes break only when their block is destroyed (earthquake, cyclone, burnt-out fire), not by flooding.
+
 ### US-1.12 Determinism
 *As a researcher, I want identical runs from identical inputs.* (SPEC §1, §12)
 - AC1 Same seed and same triggered events at the same minutes produce identical snapshots (Σ allocation, metrics, building statuses) at every step.
@@ -220,6 +228,8 @@ is defined in the cited SPEC section.
 | FR-1.21 | 3D view: `WorldView` API, scene, ground, batched buildings, power lines with flow pulses, disaster FX, picking, labels. | SPEC §8 |
 | FR-1.22 | UI: top bar, disaster rail with layer toggles, inspector, agent roster, KPI strip, chart, event log, keyboard shortcuts, mobile bottom sheets. | SPEC §9, DESIGN.md |
 | FR-1.23 | Optional bloom, auto-disabled when the frame time exceeds 25 ms. | SPEC §8.1 |
+| FR-1.24 | Underground water network: per pump-station BFS trees of mains under roads, service pipes to consumers, buried at −2.5 m; pressure and flow each step from the pump station's power share; `waterPressureBar` / `waterSupplyPct` telemetry on every consumer; hospital urgency coupling. | SPEC §4.5 |
+| FR-1.25 | Transmission layers: `power` (default on) and `water` x-ray (default off) with animated flow, fades and P/W toggles. | SPEC §8.4b, §9 |
 
 ### 6.2 FR-2.x Negotiation (Phase 2, future)
 

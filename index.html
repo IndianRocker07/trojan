@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Trojan — crisis-grid simulator: a 3D city of autonomous utility agents sharing scarce power through disasters." />
+    <title>Trojan Crisis Grid</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #fbf6e6; overflow: hidden; }
+      #world { position: fixed; inset: 0; }
+      #hud { position: fixed; inset: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="world" aria-label="3D city view"></div>
+    <div id="hud"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
