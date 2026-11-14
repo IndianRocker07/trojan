@@ -1,13 +1,11 @@
 # Trojan — Product Requirements Document
 
-Version 0.1 · 2026-11-14 · Owner: Trojan team · Status: Phase 1 in build; Phases 2–4 specified for planning.
+Version 0.1 · 2026-11-14 · Owner: Trojan team · Status: Phases 1–3 built; Phase 4 (evaluation) future.
 
 Related: `PROJECT.md` (vision, concepts, glossary), `SPEC.md` (technical source of truth; this PRD cites
 its sections and does not restate its tables), `DESIGN.md` (UI and scene look).
 
-Conventions: "MUST/SHOULD/MAY" per RFC 2119. Story ids `US-1.x` (Phase 1), `US-2.x`, `US-3.x`. Functional
-requirement ids `FR-1.x` (simulation), `FR-2.x` (negotiation), `FR-3.x` (safety). Phase 1 is the only phase
-being built now; Phases 2–3 are future and must not be started before Phase 1 exit.
+Conventions: "MUST/SHOULD/MAY" per RFC 2119. Story ids `US-1.x` (Phase 1), `US-2.x`, `US-3.x`. Functional requirement ids `FR-1.x` (simulation), `FR-2.x` (negotiation), `FR-3.x` (safety), `FR-4.x` (microgrid). Phases 1–3 are built; Phase 4 is future. The microgrid build spec is `docs/MICROGRID.md`; the Layer 2–3 build spec is `docs/NEGOTIATION.md`.
 
 ---
 
@@ -19,10 +17,10 @@ hard limits. **Problem and motivation**: `PROJECT.md` §2.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Simulation layer: 3D city, power network, grid-block disasters, live telemetry, KPIs, scenarios | **Building now** |
-| 2 | Negotiation, bidding and prioritisation layer (virtual tokens) | Future |
-| 3 | Safety layer (hard constraints, physics, guarantees, audit) | Future |
-| 4 | Evaluation and benchmarks against baselines | Future |
+| 1 | Simulation layer: 3D city, power network, grid-block disasters, live telemetry, KPIs, scenarios | **Built** |
+| 2 | Negotiation, bidding and prioritisation layer (need-based auction; tokens secondary; Jev perception) | **Built** (`docs/NEGOTIATION.md`) |
+| 3 | Safety layer (hard constraints, physics, guarantees, audit) | **Built** |
+| 4 | Evaluation and benchmarks against baselines | Future; headless bench exists (`npm run bench`) |
 
 ## 2. Goals and non-goals
 
@@ -37,7 +35,7 @@ hard limits. **Problem and motivation**: `PROJECT.md` §2.
 | G1.5 Deterministic, headless-capable engine so later layers and batch evaluation plug in unchanged | No mobile-first redesign (mobile must work and remain interactive, but desktop is primary) |
 | G1.6 KPIs that make harm and supply/demand visible in real time | No other utilities (gas, transport) and no non-power resources |
 
-### 2.2 Phase 2 — Negotiation (future)
+### 2.2 Phase 2 — Negotiation (built)
 
 | Goals | Non-goals |
 |---|---|
@@ -47,7 +45,7 @@ hard limits. **Problem and motivation**: `PROJECT.md` §2.
 | G2.4 Outperform the baseline on total damage | No cross-island power transfer by agents (islands are physical) |
 | G2.5 Negotiation observable (rounds, offers, token flows) in the UI | |
 
-### 2.3 Phase 3 — Safety (future)
+### 2.3 Phase 3 — Safety (built)
 
 | Goals | Non-goals |
 |---|---|
@@ -136,7 +134,7 @@ is defined in the cited SPEC section.
 
 ### US-1.8 Timeline and speed controls
 *As any user, I want to control time.* (SPEC §2, §7, §9)
-- AC1 The clock shows time of day and day (starts 16:00; 12 h scenario); play/pause (Space), step one minute (`.`), reset.
+- AC1 The clock shows time of day and day (starts 10:00; 24 h scenario); play/pause (Space), step one minute (`.`), reset.
 - AC2 Speeds 1×, 5×, 10×, 30×, 60× (keys 1–5) mean sim minutes per real second.
 - AC3 Changing speed or pausing never skips or double-applies a minute (whole steps only).
 - AC4 At the scenario end the run stops and a summary of KPIs is shown.
@@ -149,7 +147,7 @@ is defined in the cited SPEC section.
 *As a judge, I want one-click scripted situations.* (SPEC §7.5)
 - AC1 A scenario selector offers `quiet-night`, `monsoon-cyclone`, `earthquake`, `compound`, each with a description.
 - AC2 Loading resets the city (scenario seed) and schedules its events at the stated times.
-- AC3 `quiet-night` runs 12 h with no destroyed cells and Served % ≈ 100% with the baseline policy.
+- AC3 `quiet-night` runs 24 h with no destroyed cells and Served % ≈ 100% with the baseline policy.
 
 ### US-1.11 Layers and view toggles
 - AC1 Toggle grid, power flow, labels, status overlay from the left rail and via keys G, F, L; state shown on the control.
@@ -176,7 +174,7 @@ is defined in the cited SPEC section.
 
 ## 5. Phase 2 and 3 user stories (story level)
 
-### Phase 2 — Negotiation (future)
+### Phase 2 — Negotiation (built)
 
 | Id | Story | Acceptance (summary) |
 |---|---|---|
@@ -188,7 +186,7 @@ is defined in the cited SPEC section.
 | US-2.6 | As a judge, I want to compare negotiation to the baseline. | One switch swaps policy; KPIs reported for both. |
 | US-2.7 | As a household cluster, I want my medical-device homes protected relative to other homes. | Medical-device load receives its minSafe before non-medical discretionary load. |
 
-### Phase 3 — Safety (future)
+### Phase 3 — Safety (built)
 
 | Id | Story | Acceptance (summary) |
 |---|---|---|
@@ -201,12 +199,12 @@ is defined in the cited SPEC section.
 
 ## 6. Functional requirements
 
-### 6.1 FR-1.x Simulation (Phase 1, in build)
+### 6.1 FR-1.x Simulation (Phase 1, built)
 
 | Id | Requirement | Ref |
 |---|---|---|
 | FR-1.1 | World: 48×48 grid, 12 m cells, centred on origin; `cellId = row*48+col`; helpers for conversion. | SPEC §2 |
-| FR-1.2 | Clock: 1 step = 1 simulated minute; 12 h scenario from 16:00; speed 1/5/10/30/60 sim-min per real second. | SPEC §2, §7 |
+| FR-1.2 | Clock: 1 step = 1 simulated minute; 24 h scenario from 10:00; speed 1/5/10/30/60 sim-min per real second. | SPEC §2, §7 |
 | FR-1.3 | City generation from a seed: roads every 6th line, meandering river with bridges, elevation, 3–5 park blocks. | SPEC §3.1 |
 | FR-1.4 | Building placement with the stated counts, footprints and rules; each building has id, readable name, cells, network node. | SPEC §3.2 |
 | FR-1.5 | District naming (Westbank N/S, Riverside, Eastbank N/S). | SPEC §3.3 |
@@ -231,9 +229,9 @@ is defined in the cited SPEC section.
 | FR-1.24 | Underground water network: per pump-station BFS trees of mains under roads, service pipes to consumers, buried at −2.5 m; pressure and flow each step from the pump station's power share; `waterPressureBar` / `waterSupplyPct` telemetry on every consumer; hospital urgency coupling. | SPEC §4.5 |
 | FR-1.25 | Transmission layers: `power` (default on) and `water` x-ray (default off) with animated flow, fades and P/W toggles. | SPEC §8.4b, §9 |
 
-### 6.2 FR-2.x Negotiation (Phase 2, future)
+### 6.2 FR-2.x Negotiation (Phase 2, built)
 
-Design notes: SPEC §10. Values below are proposed defaults to be tuned in Phase 2.
+Implemented in `src/negotiation/*`. Where wording differs, `docs/NEGOTIATION.md` and `agent_prompt.md` govern: tokens buy no priority and are capped. Values below are the proposed defaults; shipped values are in `src/negotiation/config.ts`.
 
 **FR-2.1 Bid schema.** Each agent MUST submit one bid per island per negotiation tick:
 
@@ -299,9 +297,9 @@ of members, with a medical-device sub-bid protected ahead of discretionary load.
 **FR-2.10 Strategy configurability.** Weights, N, token constants and strategy MUST be configurable so that
 experiments (including learned agents) can be run headlessly.
 
-### 6.3 FR-3.x Safety (Phase 3, future)
+### 6.3 FR-3.x Safety (Phase 3, built)
 
-Design notes: SPEC §11. The validator MUST be independent of the policy; it MUST NOT import negotiation code.
+Implemented in `src/safety/*` (build spec `docs/NEGOTIATION.md` §6). The validator MUST be independent of the policy; it MUST NOT import negotiation code.
 
 | Id | Requirement |
 |---|---|
@@ -316,6 +314,20 @@ Design notes: SPEC §11. The validator MUST be independent of the policy; it MUS
 | FR-3.9 **Audit log** | Append-only entries `{tMin, island, rule, proposed, corrected, reason, severity}`; exported as JSON; shown in the UI; included in headless run output. |
 | FR-3.10 **Adversarial robustness** | A policy fuzzer proposing random, malicious or non-finite allocations MUST never produce a committed allocation that violates FR-3.1–3.2. |
 | FR-3.11 **Performance** | Validation completes within 2 ms per island per tick at the Phase 1 city size. |
+
+### 6.4 FR-4.x Microgrid (built)
+
+Build spec: `docs/MICROGRID.md`. Mechanisms: SPEC §2–§4, §6.5 and §8.
+
+| Id | Requirement | Ref |
+|---|---|---|
+| FR-4.1 | **Prosumers**: a seeded ~30% of houses get rooftop solar and a battery; every school is a campus prosumer. A prosumer covers its survival load `p_min` first and offers only the surplus to its island. | docs/MICROGRID.md §2 |
+| FR-4.2 | **Topology partitioning**: islands are connected components of the live network that contain a generator or a prosumer source. Generator-less islands are microgrids. Each island clears independently, with no cross-break allocation. | docs/MICROGRID.md §1; SPEC §4.3 |
+| FR-4.3 | **Dual bottleneck**: `P_total = min(utility DER + prosumer exports, line thermal limit)` is the supply each island clears against. | docs/MICROGRID.md §3 |
+| FR-4.4 | **Curtailment**: exports beyond a distribution edge's `capacityKW × 0.97` are curtailed at the inverters rather than tripping the line; curtailment is recorded per prosumer and per island. | docs/MICROGRID.md §3 |
+| FR-4.5 | **Pre-charge and coast**: buffers bid for charging on midday surplus and coast on reserves near sunset or after dark. Charging is sheddable and never displaces another agent's floor. | docs/MICROGRID.md §5–§6 |
+| FR-4.6 | **Dependency damage**: a utility's bid includes the damage of the services that depend on it (water to hospitals and shelters; telecom to emergency stations and hospitals), capped at 3× its own damage. | docs/MICROGRID.md §4, §6 item 4 |
+| FR-4.7 | **Buffer time-decay urgency**: urgency rises steeply as a buffer nears depletion, `exp(−k·soc)` below 50% SoC, so the last minutes of reserve weigh heavily. | docs/MICROGRID.md §6 item 5 |
 
 ## 7. Non-functional requirements
 
@@ -337,15 +349,16 @@ Design notes: SPEC §11. The validator MUST be independent of the policy; it MUS
 | NFR-14 Offline | Runs from a static build with no backend (fonts from Google Fonts degrade to system fonts) | — |
 | NFR-15 Memory | Steady-state under 500 MB; history capped by `HISTORY_LEN` | — |
 | NFR-16 Maintainability | File ownership and module contracts as in SPEC §1.1; `src/core/*` changed only via orchestrator | SPEC §1.1 |
+| NFR-17 Secrets | Jev key `TYPESAFE_API_KEY` lives in `.env.local` (git-ignored) and is served only through the Vite `/api/jev` proxy; never shipped to the browser or logged | `.env.example`, `server/vitePlugin.ts` |
 
 ## 8. Scenarios and demo flow
 
 | Scenario | Purpose | What to look for |
 |---|---|---|
-| `quiet-night` | Baseline sanity | Served ≈ 100%, damage ≈ 0, diurnal demand and solar fade after dusk |
-| `monsoon-cyclone` | Weather: solar collapse then flooding | Supply drop at 01:30, flooded riverside hospital and intake, island formation |
-| `earthquake` | Structural destruction and fire | Destroyed cells, broken lines, hospital inflow surge, spreading fire |
-| `compound` | Everything at once | Thermal plant trip, earthquake, flood; cascades under the baseline policy |
+| `quiet-night` (Quiet day) | Baseline sanity | Served ≈ 100%, damage ≈ 0, midday solar surplus, evening peak, solar fade after dusk |
+| `monsoon-cyclone` (Monsoon cyclone) | Weather: solar collapse at 13:00, then flooding from 16:00 | Supply drop as rooftop and farm solar fall to 20%, flooded riverside hospital and intake, island formation |
+| `earthquake` (Earthquake & fires) | Structural destruction and fire at 12:30, at the midday solar peak | Destroyed cells, broken lines, prosumer microgrids forming, hospital inflow surge, spreading fire |
+| `compound` (Compound crisis) | Everything at once | Thermal plant trip at 14:00, earthquake at 16:30, flood at 19:00; night on reserves; cascades under the baseline policy |
 
 Reference demo (3 minutes, Phase 1): load `earthquake` → run at 10× → select the riverside hospital → watch
 telemetry and power bar → place a flood by hand → note overload trips in the log → compare KPIs.
@@ -393,16 +406,16 @@ Definitions are normative for Phase 4; most are already measurable in Phase 1 fo
 
 | # | Question | Owner | Needed by |
 |---|---|---|---|
-| OQ-1 | Negotiation mechanism: sealed-bid priority auction with concession rounds versus contract-net with token transfers (SPEC §10 lists both)? | Phase 2 lead | Phase 2 start |
-| OQ-2 | Should agents be rule-parameterised, heuristic or learned (RL / LLM)? How does that affect the determinism requirement? | Research | Phase 2 start |
+| OQ-1 | Negotiation mechanism: sealed-bid priority auction with concession rounds versus contract-net with token transfers (SPEC §10 lists both)? **Resolved:** sealed-bid need-based auction with two rounds of concessions (initial bids, then one counter-offer round after a provisional clear). Token-based priority is rejected. See `docs/NEGOTIATION.md` §3. | Phase 2 lead | Phase 2 start |
+| OQ-2 | Should agents be rule-parameterised, heuristic or learned (RL / LLM)? How does that affect the determinism requirement? **Resolved:** System-1 perception via TypeSafe Jev (`@typesafe-ai/sdk`) supplies urgency, damage, imminent-failure risk and concession willingness, blended into a deterministic bid at a capped weight. A deterministic heuristic fallback runs when no provider is set, so headless runs without Jev are deterministic. | Research | Phase 2 start |
 | OQ-3 | Is the damage function linear in unserved fraction, or convex below minSafe? Need an agreed harm model for the evaluation. | Domain / judge | Phase 4 |
 | OQ-4 | Should medical-device households be individual bidders or only a protected sub-bid inside a cluster? | Phase 2 | Phase 2 |
 | OQ-5 | Fairness definition: Jain over served fraction overall, within class, or weighted by criticality? Fairness bound K value? | Phase 3 | Phase 3 |
-| OQ-6 | Can agents influence supply (e.g. start backup generation, ask hospitals to run diesel to free grid power)? | Product | Phase 2 |
+| OQ-6 | Can agents influence supply (e.g. start backup generation, ask hospitals to run diesel to free grid power)? **Resolved:** yes, within harm-aware limits. Agents run their own backup where it covers their load (hospitals self-supply once backup hours exceed `backupSelfSupplyHours`) and concede only load whose loss is covered. The validator still enforces physical limits. | Product | Phase 2 |
 | OQ-7 | Is inter-island power transfer (re-closing lines, mobile generators) in scope for agents? | Product | Phase 2 |
 | OQ-8 | Should disaster outcomes be stochastic per run (seeded) or fixed per scenario for judging? | Product | Phase 1 polish |
 | OQ-9 | Reference hardware definition for the 50 fps budget. | Team | Phase 1 exit |
-| OQ-10 | Do we add a headless CLI in Phase 1 or defer to Phase 4? (Engine is already Node-runnable.) | Team | Phase 1 exit |
+| OQ-10 | Do we add a headless CLI in Phase 1 or defer to Phase 4? (Engine is already Node-runnable.) **Resolved:** a headless runner exists (`npm run bench`, `scripts/negotiation-bench.ts`). The Phase 4 report (§9) is still to do. | Team | Phase 1 exit |
 
 ## 12. Milestones
 
@@ -419,4 +432,4 @@ Definitions are normative for Phase 4; most are already measurable in Phase 1 fo
 | **M3.x Safety** | Validator, physics, guarantees, atomic commit, invariants, audit | 0 violations under fuzzing |
 | **M4 Evaluation** | Headless runner, baselines, report | Reproducible report per §9 |
 
-Dates are intentionally not committed: Phase 1 is in active build; Phases 2–4 are scheduled after Phase 1 exit.
+Dates are intentionally not committed: Phases 1–3 are built; Phase 4 is scheduled after them.

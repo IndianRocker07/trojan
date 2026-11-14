@@ -1,6 +1,9 @@
 import type { Feeder, SimSnapshot, UtilityAgentState } from '../core/types';
 import { createWorker } from './character';
+import { DossierView } from './dossier';
+import { NegotiationTab } from './negotiationTab';
 import type { AgentHistory, Ring } from './history';
+import { bufferBlock, dependentsBlock, derBlock } from './microgrid';
 import { KIND_LABEL, fmtKW, fmtTele, pct, teleLabel, fmtDuration } from './format';
 import {
   button,
@@ -21,7 +24,7 @@ export interface InspectorCallbacks {
   onSelect(id: string): void;
 }
 
-type Tab = 'inspect' | 'agents';
+type Tab = 'inspect' | 'agents' | 'negotiation';
 
 interface TeleRow {
   key: string;
@@ -54,6 +57,9 @@ export class Inspector {
   private selected: string | null = null;
   private feederIdx: { src: Feeder[]; map: Map<string, Feeder> } | null = null;
   private title: HTMLElement;
+  private negTab: NegotiationTab;
+  /** The one scroll region: header and tabs stay fixed, the tab content scrolls. */
+  private bodyEl: HTMLElement;
 
   constructor(
     private cb: InspectorCallbacks,
@@ -66,6 +72,7 @@ export class Inspector {
       options: [
         { value: 'inspect', label: 'Inspect' },
         { value: 'agents', label: 'Agents' },
+        { value: 'negotiation', label: 'Negotiation' },
       ],
       value: 'inspect',
       cls: 'tabs',
@@ -80,13 +87,19 @@ export class Inspector {
       h('div', 'empty-art', createWorker()),
       h('p', 'empty-title', 'Click any building to inspect its agent'),
       h('p', 'muted', 'Every hospital, pump, tower and shelter reports its own live demand, urgency and backup.'),
-      browse,
+      h('div', 'chip-row tight', browse, button({ label: 'Negotiation', cls: 'small', onClick: () => this.showTab('negotiation') })),
     );
     this.detailHost = h('div', 'detail');
     this.rosterList = h('div', 'roster-list');
     this.rosterMore = h('p', 'muted small-note');
     this.rosterView = h('div', 'roster', h('p', 'muted small-note', 'Sorted by urgency. Click to focus.'), this.rosterList, this.rosterMore);
-    p.body.append(this.emptyView, this.detailHost, this.rosterView);
+    this.negTab = new NegotiationTab({ onSelect: (id) => this.cb.onSelect(id) });
+    this.negTab.el.hidden = true;
+    p.body.append(this.emptyView, this.detailHost, this.rosterView, this.negTab.el);
+    this.bodyEl = p.body;
+    p.body.tabIndex = 0;
+    p.body.setAttribute('role', 'region');
+    p.body.setAttribute('aria-label', 'Inspector content');
     this.el = h('aside', { class: 'rail rail-right', 'aria-label': 'Inspector' }, p.el);
     this.applyView();
   }
@@ -96,6 +109,7 @@ export class Inspector {
   }
 
   showTab(t: Tab) {
+    if (t !== this.tab) this.bodyEl.scrollTop = 0;
     this.tab = t;
     this.tabs.set(t);
     this.applyView();
@@ -106,6 +120,7 @@ export class Inspector {
     this.emptyView.hidden = !(this.tab === 'inspect' && this.selected === null);
     this.detailHost.hidden = !showDetail;
     this.rosterView.hidden = this.tab !== 'agents';
+    this.negTab.el.hidden = this.tab !== 'negotiation';
   }
 
   reset() {
@@ -116,6 +131,7 @@ export class Inspector {
     this.rosterKey = '';
     this.rosterOrder = '';
     this.feederIdx = null;
+    this.negTab.reset();
   }
 
   setSelected(id: string | null, s: SimSnapshot) {
@@ -124,6 +140,7 @@ export class Inspector {
     this.detail = null;
     this.detailHost.replaceChildren();
     if (id && s.buildings[id]) {
+      this.bodyEl.scrollTop = 0;
       this.history.track(s.agents[id]);
       this.detail = this.buildDetail(id, s);
       this.detailHost.append(this.detail.root);
@@ -142,6 +159,7 @@ export class Inspector {
       else this.detail.update(s);
     }
     if (this.tab === 'agents') this.updateRoster(s);
+    if (this.tab === 'negotiation') this.negTab.update(s);
   }
 
   // ───────────────────────── detail ─────────────────────────
@@ -202,6 +220,22 @@ export class Inspector {
           h('div', 'tiles', tile('Criticality', crit), tile('Urgency', urg, urgFill.el), tile('Damage per hour', dmg), tile('Tokens', tok)),
         ),
       );
+      // ── microgrid: prosumer DER, utility buffer, dependents (each hides itself when its data is absent)
+      const der = derBlock();
+      const buf = bufferBlock();
+      const deps = dependentsBlock((bid) => this.cb.onSelect(bid));
+      root.append(der.el, buf.el, deps.el);
+      updaters.push((s) => {
+        const a = s.agents[id];
+        if (!a) return;
+        der.update(a);
+        buf.update(a, s);
+        deps.update(a, s);
+      });
+      // ── negotiation dossier
+      const dossier = new DossierView(id, { onSelect: (bid) => this.cb.onSelect(bid) });
+      root.append(dossier.el);
+      updaters.push((s) => dossier.update(s));
       // ── telemetry
       const rows: TeleRow[] = [];
       const table = h('div', 'tele');

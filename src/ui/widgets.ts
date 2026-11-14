@@ -7,6 +7,7 @@ export const C = {
   blue: '#0a7cff',
   surface2: '#f3ead0',
   white: '#ffffff',
+  orange: '#ff8a00',
 };
 
 export const isMobile = () => window.matchMedia('(max-width: 959px)').matches;
@@ -75,6 +76,8 @@ const ICONS = {
   bolt: `<polygon points="13.5,2.5 5,13.5 11,13.5 9.5,21.5 19,9.5 13,9.5" fill="#ffd60a" ${S}/>`,
   dockDisasters: `<polyline points="2.5,12 7,12 9.5,5 14,19 16.5,12 21.5,12" fill="none" ${S}/>`,
   dockInspect: `<rect x="4" y="9" width="16" height="12" rx="2" fill="#fff" ${S}/><path d="M8 9V4.5h8V9" fill="none" ${S}/>`,
+  globe: `<circle cx="12" cy="12" r="8.5" fill="#fff" ${S}/><path d="M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17" fill="none" ${S}/>`,
+  dockLive: `<path d="M4 5h16v11H11l-5 4v-4H4z" fill="#fff" ${S}/><path d="M8 9.5h8M8 12.5h5" fill="none" ${S}/>`,
   dockStats: `<rect x="4" y="12" width="4" height="8" fill="#fff" ${S}/><rect x="10" y="6" width="4" height="14" fill="#fff" ${S}/><rect x="16" y="9" width="4" height="11" fill="#fff" ${S}/>`,
 } as const;
 export type IconName = keyof typeof ICONS;

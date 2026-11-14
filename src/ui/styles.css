@@ -32,7 +32,6 @@
   --gap: 12px;
   --pad: 16px;
   --topbar-h: 56px;
-  --rail-top: 84px;
   --strip-h: 168px;
   --strip-eff: var(--strip-h);
 }
@@ -58,6 +57,12 @@
   letter-spacing: -0.01em;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  /* Vertical budget for the floating columns. --topbar-bottom is measured live (disasterRail.ts) because the top
+     bar wraps on narrow screens. --strip-eff is 0 when the KPI strip is closed. */
+  --topbar-bottom: 70px;
+  --rail-top: calc(var(--topbar-bottom) + 14px);
+  --rail-bottom: calc(var(--strip-eff) + 24px); /* left column: 12 px above the KPI strip */
+  --inspector-bottom: calc(var(--strip-eff) + 78px); /* right column: 22 px offset + 44 px pill (incl. border) + 12 px gap */
 }
 .hud > * {
   pointer-events: auto;
@@ -494,6 +499,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: none;
   padding: 10px 10px 10px var(--pad);
   min-height: 52px;
 }
@@ -503,11 +509,65 @@
   letter-spacing: -0.04em;
 }
 .hud .panel-body {
+  flex: 1 1 auto;
   padding: 0 var(--pad) var(--pad);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   min-height: 0;
+  overscroll-behavior: contain;
+}
+/* Scroll regions share one look: ink thumb on the cream track (DESIGN.md), no double bars, no sideways scroll. */
+.hud .panel-body,
+.hud .dr-scroll,
+.hud .fd-top,
+.hud .fd-list,
+.hud .hist,
+.hud .audit,
+.hud .fd-gloss,
+.hud .st-tablewrap,
+.hud .st-stage,
+.hud .st-pills,
+.hud .log {
   scrollbar-width: thin;
-  scrollbar-color: var(--ink) transparent;
+  scrollbar-color: var(--ink) var(--surface-2);
+}
+.hud .panel-body::-webkit-scrollbar,
+.hud .dr-scroll::-webkit-scrollbar,
+.hud .fd-top::-webkit-scrollbar,
+.hud .fd-list::-webkit-scrollbar,
+.hud .hist::-webkit-scrollbar,
+.hud .audit::-webkit-scrollbar,
+.hud .fd-gloss::-webkit-scrollbar,
+.hud .log::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+.hud .panel-body::-webkit-scrollbar-track,
+.hud .dr-scroll::-webkit-scrollbar-track,
+.hud .fd-top::-webkit-scrollbar-track,
+.hud .fd-list::-webkit-scrollbar-track,
+.hud .hist::-webkit-scrollbar-track,
+.hud .audit::-webkit-scrollbar-track,
+.hud .fd-gloss::-webkit-scrollbar-track,
+.hud .log::-webkit-scrollbar-track {
+  background: var(--surface-2);
+}
+.hud .panel-body::-webkit-scrollbar-thumb,
+.hud .dr-scroll::-webkit-scrollbar-thumb,
+.hud .fd-top::-webkit-scrollbar-thumb,
+.hud .fd-list::-webkit-scrollbar-thumb,
+.hud .hist::-webkit-scrollbar-thumb,
+.hud .audit::-webkit-scrollbar-thumb,
+.hud .fd-gloss::-webkit-scrollbar-thumb,
+.hud .log::-webkit-scrollbar-thumb {
+  background: var(--ink);
+  border: 2px solid var(--surface-2);
+  border-radius: 999px;
+}
+.hud .panel-body:focus-visible,
+.hud .dr-scroll:focus-visible,
+.hud .fd-list:focus-visible {
+  outline-offset: -4px;
 }
 .hud .panel[data-collapsed='true'] .panel-body {
   display: none;
@@ -527,17 +587,13 @@
   margin: 16px 0 8px;
 }
 
-/* rails */
+/* rails (desktop geometry is in the min-width block; phone sheets are in the bottom-sheet block) */
 .hud .rail {
   position: fixed;
-  top: var(--rail-top);
   display: flex;
   flex-direction: column;
   gap: var(--gap);
-  max-height: calc(100% - var(--rail-top) - var(--strip-eff) - 24px - 62px);
-  padding-bottom: 6px;
   min-height: 0;
-  transition: max-height var(--dur) var(--ease);
 }
 .hud .rail-left {
   left: 12px;
@@ -549,12 +605,34 @@
 }
 .hud .rail > .panel {
   flex: 0 1 auto;
+  min-height: 0;
 }
-.hud .rail-left > .disasters {
-  flex: 1 1 auto;
-}
-.hud .rail-left > .layers-panel {
-  flex: none;
+@media (min-width: 960px) {
+  /* Left column: one flex column from the top bar down to just above the KPI strip. The Disasters card (or the
+     feed) takes the remaining height and scrolls inside itself; the tab bar and Layers never overlap it. */
+  .hud .rail-left {
+    top: var(--rail-top);
+    bottom: var(--rail-bottom);
+  }
+  .hud .rail-left > .disasters,
+  .hud .rail-left > .feed-panel {
+    flex: 1 1 0;
+  }
+  .hud .rail-left > .rail-tabs,
+  .hud .rail-left > .layers-panel {
+    flex: none;
+  }
+  .hud .rail-left > .panel[data-collapsed='true'] {
+    flex: none;
+  }
+  /* Right column: content height, capped so it ends above the layer pill and the KPI strip. */
+  .hud .rail-right {
+    top: var(--rail-top);
+    max-height: calc(100% - var(--rail-top) - var(--inspector-bottom));
+  }
+  .hud .rail-right > .panel {
+    flex: 0 1 auto;
+  }
 }
 
 /* ───────────── top bar ───────────── */
@@ -662,6 +740,29 @@
   background: var(--surface-2);
   border: var(--border-w) solid var(--ink);
   border-radius: var(--radius);
+}
+/* Disasters card: pinned sliders, then one scroll region. The region's scrollbar sits inside the card's 16 px gutter. */
+.hud .dr-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.hud .dr-body > .sliders,
+.hud .dr-body > .pick-banner {
+  flex: none;
+}
+.hud .dr-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 4px 4px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.hud .dr-scroll:focus-visible {
+  outline-offset: -4px;
 }
 .hud .disaster-list {
   display: grid;
@@ -1021,7 +1122,7 @@
   bottom: 12px;
   height: var(--strip-h);
   display: grid;
-  grid-template-columns: 708px minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-columns: 740px minmax(0, 1.4fr) minmax(0, 1fr);
   gap: var(--gap);
   padding-bottom: 6px;
   transition:
@@ -1061,9 +1162,19 @@
 }
 .hud .kpis {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: var(--gap);
   min-height: 0;
+}
+.hud .kpi[hidden] {
+  display: none;
+}
+.hud .kpi-sub {
+  font: 500 12px/1.2 var(--font-mono);
+}
+.hud .kpi-line {
+  min-width: 0;
 }
 .hud .kpi {
   display: flex;
@@ -1099,7 +1210,7 @@
   gap: 2px;
 }
 .hud .kpi-num {
-  font: 600 40px/0.95 var(--font-display);
+  font: 600 36px/0.95 var(--font-display);
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
 }
@@ -1132,9 +1243,9 @@
 }
 .hud .legend {
   display: flex;
-  gap: 12px;
+  gap: 7px;
   margin-left: auto;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 .hud .lg {
@@ -1162,6 +1273,12 @@
 }
 .hud .sw.alloc {
   background: var(--accent);
+}
+.hud .sw.pros {
+  height: 0;
+  border: 0;
+  border-top: 4px dotted var(--orange);
+  border-radius: 0;
 }
 .hud .chart-wrap {
   position: relative;
@@ -1282,10 +1399,19 @@
 /* ───────────── medium: tighten ───────────── */
 @media (max-width: 1280px) {
   .hud .strip {
-    grid-template-columns: 560px minmax(0, 1.1fr) minmax(0, 1fr);
+    grid-template-columns: 640px minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+  .hud .kpis {
+    gap: 8px;
+  }
+  .hud .kpi {
+    padding: 10px 8px 8px;
+  }
+  .hud .kpi-label {
+    font-size: 13px;
   }
   .hud .kpi-num {
-    font-size: 34px;
+    font-size: 28px;
   }
   .hud .rail-right {
     width: 330px;
@@ -1396,6 +1522,9 @@
     background: var(--accent);
   }
 
+  .hud {
+    --topbar-bottom: 124px; /* fallback until the live measurement lands */
+  }
   .hud .rail,
   .hud .strip {
     left: 0;
@@ -1403,9 +1532,12 @@
     top: auto;
     bottom: 72px;
     width: auto;
-    max-height: min(56%, calc(100% - 210px));
+    /* At most 70% of the screen, and never higher than the top bar plus a gap. The sheet is the only scroller. */
+    max-height: min(70vh, calc(100vh - var(--topbar-bottom) - 72px - 16px));
     height: auto;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 12px 12px 14px;
     background: var(--bg);
     border-top: var(--border-w) solid var(--ink);
@@ -1420,6 +1552,14 @@
   .hud .rail-left,
   .hud .rail-right {
     width: auto;
+    top: auto;
+    bottom: 72px;
+  }
+  .hud .rail-right {
+    max-height: min(70vh, calc(100vh - var(--topbar-bottom) - 72px - 16px));
+  }
+  .hud[data-sheet]:not([data-sheet='']) .layer-pill {
+    visibility: hidden; /* a sheet is open: the layer pill would sit under its corner */
   }
   .hud[data-sheet='disasters'] .rail-left,
   .hud[data-sheet='inspect'] .rail-right,
@@ -1446,8 +1586,12 @@
     gap: 12px;
   }
   .hud .kpis {
+    grid-auto-flow: row;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
+  }
+  .hud .kpi[data-key='islands'] {
+    grid-column: span 2;
   }
   .hud .kpi {
     padding: 8px 10px;
@@ -1459,4 +1603,690 @@
   .hud .log-card {
     height: 190px;
   }
+}
+
+/* ───────────── negotiation dossier (Layer 2) ───────────── */
+.hud .small {
+  font-size: 13px;
+}
+.hud .chip-row.tight {
+  margin-top: 6px;
+  gap: 6px;
+}
+.hud .ref {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-bottom: var(--border-w) solid var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+.hud .ref:hover:not(:disabled) {
+  background: var(--yellow);
+}
+.hud .ref:disabled {
+  border-bottom-style: dotted;
+  cursor: default;
+}
+.hud .dossier > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+.hud .dossier > summary::-webkit-details-marker {
+  display: none;
+}
+.hud .dossier > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-left: 9px solid var(--ink);
+  border-right-width: 0;
+  transition: transform var(--dur) var(--ease);
+}
+.hud .dossier[open] > summary::before {
+  transform: rotate(90deg);
+}
+.hud .dossier > summary .section-title {
+  margin: 0;
+}
+.hud .dossier-msg {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: var(--border-w) dashed var(--ink);
+  border-radius: var(--radius);
+  font-size: 14px;
+}
+.hud .dsec {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: var(--border-w) solid var(--ink);
+}
+.hud .dsec:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.hud .sub-title {
+  font: 600 16px/1.1 var(--font-display);
+  letter-spacing: -0.03em;
+  margin: 8px 0 6px;
+}
+.hud .sub-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hud .lbl {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+.hud .cluster-note {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--yellow);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+}
+.hud .notes,
+.hud .ledger,
+.hud .contracts,
+.hud .audit,
+.hud .hist,
+.hud .prio-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hud ul.notes {
+  font-size: 14px;
+}
+.hud .notes li {
+  padding: 2px 0 2px 16px;
+  position: relative;
+}
+.hud .notes li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0.7em;
+  width: 7px;
+  height: 7px;
+  background: var(--ink);
+  border-radius: 50%;
+}
+.hud .tiles3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.hud .tile-val.sm {
+  font-size: 18px;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.hud .tok-tile {
+  max-width: 140px;
+}
+.hud .reason {
+  font-size: 14px;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.hud .meters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+.hud .meter-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.hud .meter .gauge {
+  margin-top: 2px;
+}
+
+/* priority */
+.hud .prio-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 14px;
+}
+.hud .prio-bar {
+  display: flex;
+  height: 22px;
+  margin: 4px 0 8px;
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.hud .prio-seg {
+  height: 100%;
+  border-right: var(--border-w) solid var(--ink);
+  min-width: 0;
+}
+.hud .prio-seg[style*='width: 0%'] {
+  border-right: 0;
+}
+.hud .t-crit {
+  background: var(--coral);
+}
+.hud .t-urg {
+  background: var(--orange);
+}
+.hud .t-dmg {
+  background: var(--yellow);
+}
+.hud .t-tok {
+  background: var(--lilac);
+}
+.hud .t-fair {
+  background: repeating-linear-gradient(45deg, var(--pink) 0 3px, var(--surface) 3px 6px);
+}
+.hud .prio-legend li {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.hud .prio-swatch {
+  width: 14px;
+  height: 14px;
+  border: var(--border-w) solid var(--ink);
+  border-radius: 3px;
+}
+
+/* waterfall */
+.hud .waterfall {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.hud .wf-step {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 4px;
+  text-align: center;
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--ink);
+  border-radius: 6px;
+}
+.hud .wf-label {
+  font-size: 11px;
+  line-height: 1.1;
+  color: var(--muted);
+}
+.hud .wf-val {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.hud .wf-final {
+  background: var(--accent);
+}
+.hud .wf-final .wf-label {
+  color: var(--ink);
+}
+.hud .wf-step[data-changed='true']:not(.wf-final) {
+  background: var(--yellow);
+}
+.hud .wf-arrow {
+  flex: none;
+  align-self: center;
+  font-weight: 700;
+  font-size: 12px;
+}
+.hud .expl .chip-row {
+  margin-top: 8px;
+}
+.hud .expl .small {
+  display: block;
+  margin-top: 6px;
+}
+
+/* history */
+.hud .spark-wrap {
+  margin: 6px 0 8px;
+}
+.hud .hist-spark {
+  display: block;
+  width: 100%;
+  height: 48px;
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+}
+.hud .spark-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  margin-top: 3px;
+}
+.hud .lg-req {
+  border-bottom: 3px dashed var(--blue);
+}
+.hud .lg-fin {
+  border-bottom: 3px solid var(--ink);
+}
+/* Inside the inspector the panel body is the only scroller, so history lists do not nest a second one. */
+.hud .hist {
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.hud .hist-row + .hist-row {
+  border-top: var(--border-w) solid var(--ink);
+}
+.hud .hist-row:nth-child(even) > .hist-head {
+  background: var(--surface-2);
+}
+.hud .hist-head {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: 'a b c' 'd d e';
+  align-items: center;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 0;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.hud .hist-head > :nth-child(1) {
+  grid-area: a;
+}
+.hud .hist-head > :nth-child(2) {
+  grid-area: b;
+}
+.hud .hist-head > :nth-child(3) {
+  grid-area: c;
+}
+.hud .hist-head > :nth-child(4) {
+  grid-area: d;
+  justify-self: start;
+}
+.hud .hist-head > :nth-child(5) {
+  grid-area: e;
+  justify-self: end;
+  color: var(--muted);
+}
+.hud .hist-head:hover {
+  background: var(--yellow);
+}
+.hud .hist-head[aria-expanded='true'] {
+  box-shadow: inset 5px 0 0 var(--ink);
+}
+.hud .hist-head:focus-visible {
+  outline-offset: -4px;
+}
+.hud .hist-body {
+  padding: 8px 10px 12px;
+  background: var(--surface);
+  border-top: var(--border-w) dashed var(--ink);
+}
+.hud .hist-body .prio {
+  margin-bottom: 10px;
+}
+
+/* ledger / contracts */
+.hud .ledger li {
+  display: grid;
+  grid-template-columns: 44px 1fr auto auto;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.hud .ledger li + li,
+.hud .contract + .contract {
+  border-top: var(--border-w) dashed var(--ink);
+}
+.hud .contract {
+  padding: 6px 0;
+}
+
+/* ───────────── negotiation tab ───────────── */
+.hud .neg-tab .block:first-child .section-title {
+  margin-top: 0;
+}
+.hud .island {
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--surface);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+}
+.hud .island .sub-title {
+  margin: 0;
+}
+.hud .sr-bar {
+  position: relative;
+  height: 18px;
+  margin: 8px 0 6px;
+  background: repeating-linear-gradient(45deg, var(--coral) 0 4px, var(--surface) 4px 8px);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.hud .sr-supply {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  border-right: var(--border-w) solid var(--ink);
+}
+.hud .sr-tick {
+  display: none;
+}
+.hud .rounds {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.hud .rounds th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2px 6px 2px 0;
+}
+.hud .rounds td {
+  padding: 4px 6px 4px 0;
+  vertical-align: top;
+  border-top: var(--border-w) dashed var(--ink);
+}
+.hud .conc-item {
+  display: block;
+}
+.hud .jev {
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  padding: 2px 10px;
+}
+.hud .err {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: var(--coral);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  font-weight: 600;
+}
+.hud .viol {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--accent);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.hud .viol[data-bad='true'] {
+  background: var(--red);
+  color: #fff;
+}
+.hud .viol-num {
+  font: 600 44px/1 var(--font-display);
+  letter-spacing: -0.04em;
+}
+.hud .viol-text {
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.2;
+}
+.hud .starving {
+  margin-top: 8px;
+}
+.hud .audit {
+  margin-top: 10px;
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.hud .audit-row {
+  padding: 6px 10px;
+  border-left: 8px solid var(--ink);
+  background: var(--surface);
+}
+.hud .audit-row + .audit-row {
+  border-top: var(--border-w) solid var(--ink);
+}
+.hud .audit-row[data-sev='crit'] {
+  border-left-color: var(--coral);
+}
+.hud .audit-row[data-sev='warn'] {
+  border-left-color: var(--yellow);
+}
+.hud .audit-row[data-sev='info'] {
+  border-left-color: var(--blue);
+}
+.hud .audit-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.hud .audit-top .chip {
+  height: 22px;
+  font-size: 12px;
+}
+.hud .sev {
+  font-weight: 700;
+  font-size: 13px;
+}
+.hud .audit-row[data-sev='crit'] .sev {
+  background: var(--coral);
+  padding: 0 6px;
+  border: var(--border-w) solid var(--ink);
+  border-radius: 6px;
+}
+
+/* ───────────── top bar mode switches ───────────── */
+.hud .tb-modes {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.hud .mode-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hud .mode-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.hud .seg.mode button {
+  height: 30px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 0 8px;
+}
+@media (max-width: 1500px) and (min-width: 960px) {
+  .hud .mode-label {
+    display: none;
+  }
+}
+@media (max-width: 959px) {
+  .hud .tb-modes {
+    order: 6;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+}
+
+.hud .inspector .panel-head .seg.tabs {
+  order: 3;
+  flex: 1 0 100%;
+  margin-top: 6px;
+}
+.hud .inspector .panel-head .seg.tabs button {
+  flex: 1;
+}
+.hud .inspector .panel-title {
+  flex: 1;
+}
+.hud .seg.mode {
+  flex: none;
+}
+.hud .seg.mode button {
+  white-space: nowrap;
+  flex: none;
+  min-width: 0;
+}
+.hud .mode-group {
+  flex: none;
+}
+.hud .conc-item {
+  margin-bottom: 4px;
+}
+.hud .conc-item .mono,
+.hud .conc-item .muted {
+  white-space: nowrap;
+}
+.hud .rounds td:nth-child(2) {
+  white-space: nowrap;
+}
+.hud .inspector .panel-head {
+  flex: none;
+}
+.hud .waterfall {
+  gap: 0;
+}
+.hud .wf-step {
+  padding: 5px 2px;
+}
+.hud .wf-label {
+  font-size: 10.5px;
+}
+.hud .wf-val {
+  font-size: 11.5px;
+}
+.hud .wf-arrow {
+  width: 10px;
+  font-size: 10px;
+  text-align: center;
+}
+
+/* ───────────── microgrid: segmented supply bars, island breakdown, DER / buffer / dependents ───────────── */
+.hud .nomargin {
+  margin: 0;
+}
+.hud .seg-bar {
+  position: relative;
+  display: flex;
+  height: 20px;
+  margin: 8px 0 6px;
+  background: var(--surface);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.hud .seg-fill {
+  height: 100%;
+  flex: none;
+  min-width: 0;
+}
+.hud .seg-fill + .seg-fill {
+  border-left: var(--border-w) solid var(--ink);
+}
+.hud .seg-fill[style*='width: 0%'] {
+  border-left: 0;
+}
+.hud .seg-fill.util,
+.hud .seg-fill.self,
+.hud .seg-sw.util,
+.hud .seg-sw.self {
+  background: var(--accent);
+}
+.hud .seg-fill.pros,
+.hud .seg-sw.pros {
+  background: repeating-linear-gradient(90deg, var(--orange) 0 3px, var(--surface) 3px 6px);
+}
+.hud .seg-fill.curt,
+.hud .seg-sw.curt {
+  background: repeating-linear-gradient(45deg, var(--coral) 0 4px, var(--surface) 4px 8px);
+}
+.hud .seg-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 0;
+  margin-left: -2px;
+  border-left: 4px solid var(--ink);
+  box-shadow: 0 0 0 1px var(--surface);
+}
+.hud .seg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+.hud .seg-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.hud .seg-sw {
+  display: inline-block;
+  width: 14px;
+  height: 12px;
+  border: var(--border-w) solid var(--ink);
+  border-radius: 2px;
+}
+.hud .seg-sw.mark {
+  width: 4px;
+  border-width: 0;
+  background: var(--ink);
+  border-radius: 0;
+}
+.hud .island-break {
+  margin: 4px 0;
+}
+.hud .deps {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.hud .dep {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 14px;
+}
+.hud .dep + .dep {
+  border-top: var(--border-w) dashed var(--ink);
+}
+.hud .der-block .tile-val.sm,
+.hud .buffer-block .tile-val.sm {
+  font-size: 20px;
+}
+.hud .der-block .sbar {
+  margin-top: 10px;
+}
+
+.hud .neg-tab .block:has(> .islands) {
+  margin-bottom: 14px;
 }

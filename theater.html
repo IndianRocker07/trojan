@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Negotiation Theater</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #040918; overflow: hidden; font: 600 13px Inter, system-ui, sans-serif; color: #f3f1ff; }
+      #app { position: fixed; inset: 0; }
+      #cap { position: fixed; left: 16px; right: 16px; margin: 0 auto; bottom: 18px; z-index: 10; max-width: 640px; box-sizing: border-box;
+             background: rgba(9, 15, 48, 0.9); border: 2px solid #b9a6ff; border-radius: 12px; padding: 8px 14px; text-align: center; pointer-events: none; }
+      #cap b { color: #ff9be6; }
+      #cap .c { color: #c9c6ee; font-weight: 500; margin-top: 2px; }
+      #stats { position: fixed; left: 10px; top: 10px; z-index: 10; font: 600 11px ui-monospace, monospace; color: #8f93c8; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="cap">loading…</div>
+    <div id="stats"></div>
+    <script type="module" src="/src/theater/devMain.ts"></script>
+  </body>
+</html>

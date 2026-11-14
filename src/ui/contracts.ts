@@ -35,9 +35,9 @@ export interface WorldLike {
 }
 
 export const SCENARIO_OPTIONS: { id: string; name: string }[] = [
-  { id: 'quiet-night', name: 'Quiet night' },
+  { id: 'quiet-night', name: 'Quiet day' },
   { id: 'monsoon-cyclone', name: 'Monsoon cyclone' },
-  { id: 'earthquake', name: 'Earthquake' },
+  { id: 'earthquake', name: 'Earthquake & fires' },
   { id: 'compound', name: 'Compound crisis' },
 ];
 

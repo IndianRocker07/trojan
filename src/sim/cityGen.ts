@@ -357,6 +357,29 @@ export function generateCity(seed: number): { cells: GridCell[]; buildings: Reco
     }
   }
 
+  // ── Prosumers (docs/MICROGRID.md §2): own independent Rng stream so layout / agent randomness is untouched ──
+  const dr = new Rng((seed ^ 0xde7a55) >>> 0);
+  for (const b of placed) {
+    if (b.kind === 'house') {
+      if (!dr.chance(0.3)) continue; // every house consumes exactly one draw → stable assignment
+      b.prosumer = {
+        kind: 'rooftop',
+        solarKWp: Math.round(dr.range(3, 7) * 10) / 10,
+        batteryKWh: 10,
+        batteryMaxKW: 3,
+        survivalKW: Math.round(dr.range(0.4, 0.6) * 100) / 100,
+      };
+    } else if (b.kind === 'school') {
+      b.prosumer = {
+        kind: 'campus',
+        solarKWp: Math.round(dr.range(60, 120)),
+        batteryKWh: Math.round(dr.range(150, 250)),
+        batteryMaxKW: 60,
+        survivalKW: 24, // refined to 15% of the school's base demand when its agent is created
+      };
+    }
+  }
+
   lastInfo.set(cells, { riverMin });
   return { cells, buildings };
 }

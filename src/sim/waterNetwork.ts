@@ -206,6 +206,10 @@ export interface WaterResult {
   pressure: { get(nodeId: string): number | undefined };
   /** water flowing through a node's downstream side (m3/h); for a source = total delivered */
   flow: { get(nodeId: string): number | undefined };
+  /** index-based access (same values): node id → index, and the per-node arrays */
+  idx: Map<string, number>;
+  pressureArr: Float64Array;
+  flowArr: Float64Array;
 }
 
 interface Compiled {
@@ -214,6 +218,11 @@ interface Compiled {
   idx: Map<string, number>;
   from: Int32Array;
   to: Int32Array;
+  sources: Int32Array;
+  consumers: Int32Array;
+  broken: Uint8Array;
+  /** destroyed cell ids the alive / broken flags were computed for (null = never computed) */
+  destroyedKey: number[] | null;
 }
 const compiledCache = new WeakMap<WaterNetwork, Compiled>();
 function compile(net: WaterNetwork): Compiled {
@@ -229,55 +238,91 @@ function compile(net: WaterNetwork): Compiled {
       from[i] = idx.get(p.from)!;
       to[i] = idx.get(p.to)!;
     });
-    c = { nodes, pipes, idx, from, to };
+    const sources: number[] = [];
+    const consumers: number[] = [];
+    nodes.forEach((n, i) => {
+      if (n.kind === 'source') sources.push(i);
+      else if (n.kind === 'consumer') consumers.push(i);
+    });
+    c = {
+      nodes,
+      pipes,
+      idx,
+      from,
+      to,
+      sources: Int32Array.from(sources),
+      consumers: Int32Array.from(consumers),
+      broken: new Uint8Array(pipes.length),
+      destroyedKey: null,
+    };
     compiledCache.set(net, c);
   }
   return c;
+}
+
+/** node id → index of the compiled network (index space of `WaterResult.pressureArr` / `flowArr`). */
+export function waterIndex(net: WaterNetwork): Map<string, number> {
+  return compile(net).idx;
 }
 
 /**
  * Per-tick hydraulics (SPEC 4.5).
  * @param sourceServed (grid+backup) served fraction of a pump station building
  * @param demandM3h    water demand of a served consumer building
+ * @param demandArr    optional precomputed demand per node index (consumers); replaces `demandM3h`
  */
 export function updateWaterNetwork(
   net: WaterNetwork,
   cells: GridCell[],
   sourceServed: (stationId: string) => number,
   demandM3h: (buildingId: string) => number,
+  demandArr?: Float64Array,
 ): WaterResult {
   const c = compile(net);
-  const { nodes, pipes, from, to, idx } = c;
+  const { nodes, pipes, from, to, idx, sources, consumers, broken } = c;
   const pressure = new Float64Array(nodes.length);
   const flow = new Float64Array(nodes.length);
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i];
-    n.alive = cells[n.cell].status !== 'destroyed';
-    if (n.kind === 'source') {
-      const served = n.alive ? sourceServed(n.buildingId!) : 0;
-      pressure[i] = 4.5 * Math.min(1, Math.max(0, served) / 0.35);
+  // alive / broken only depend on which cells are destroyed: recompute them when that set changed
+  const key: number[] = [];
+  for (let i = 0; i < cells.length; i++) if (cells[i].status === 'destroyed') key.push(i);
+  const prev = c.destroyedKey;
+  let same = prev !== null && prev.length === key.length;
+  if (same) for (let i = 0; i < key.length; i++) if (prev![i] !== key[i]) { same = false; break; }
+  if (!same) {
+    c.destroyedKey = key;
+    for (let i = 0; i < nodes.length; i++) nodes[i].alive = cells[nodes[i].cell].status !== 'destroyed';
+    for (let i = 0; i < pipes.length; i++) {
+      const p = pipes[i];
+      let b = false;
+      for (let k = 0; k < p.cells.length; k++) {
+        if (cells[p.cells[k]].status === 'destroyed') {
+          b = true;
+          break;
+        }
+      }
+      broken[i] = b ? 1 : 0;
+      p.status = b ? 'broken' : 'ok';
     }
+  }
+  for (let k = 0; k < sources.length; k++) {
+    const i = sources[k];
+    const n = nodes[i];
+    const served = n.alive ? sourceServed(n.buildingId!) : 0;
+    pressure[i] = 4.5 * Math.min(1, Math.max(0, served) / 0.35);
   }
   for (let i = 0; i < pipes.length; i++) {
     const p = pipes[i];
-    let broken = false;
-    for (let k = 0; k < p.cells.length; k++) {
-      if (cells[p.cells[k]].status === 'destroyed') {
-        broken = true;
-        break;
-      }
-    }
-    p.status = broken ? 'broken' : 'ok';
     const pf = pressure[from[i]];
     const drop = p.tier === 'main' ? 0.15 : 0.05;
-    const pt = broken || !nodes[to[i]].alive || pf <= 0 ? 0 : Math.max(0, pf - drop);
+    const pt = broken[i] || !nodes[to[i]].alive || pf <= 0 ? 0 : Math.max(0, pf - drop);
     pressure[to[i]] = pt;
     p.pressureBar = pt;
     p.flowM3h = 0;
   }
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i];
-    if (n.kind === 'consumer') flow[i] = demandM3h(n.buildingId!) * Math.min(1, pressure[i] / 1.5);
+  for (let k = 0; k < consumers.length; k++) {
+    const i = consumers[k];
+    const d = demandArr ? demandArr[i] : demandM3h(nodes[i].buildingId!);
+    flow[i] = d * Math.min(1, pressure[i] / 1.5);
   }
   for (let i = pipes.length - 1; i >= 0; i--) {
     const f = flow[to[i]];
@@ -285,5 +330,5 @@ export function updateWaterNetwork(
     flow[from[i]] += f;
   }
   const getter = (arr: Float64Array) => ({ get: (id: string) => (idx.has(id) ? arr[idx.get(id)!] : undefined) });
-  return { pressure: getter(pressure), flow: getter(flow) };
+  return { pressure: getter(pressure), flow: getter(flow), idx, pressureArr: pressure, flowArr: flow };
 }

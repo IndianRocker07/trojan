@@ -3,8 +3,8 @@
  * rough disaster model, so the view can be developed and screenshotted without the engine.
  */
 import { Rng } from '../core/rng';
-import { CELL, GRID_COLS, GRID_ROWS, cellCenter } from '../core/constants';
-import type { DisasterEvent, DisasterKind, DisasterParams, SimSnapshot } from '../core/types';
+import { CELL, GRID_COLS, GRID_ROWS, START_HOUR, cellCenter } from '../core/constants';
+import type { DisasterEvent, DisasterKind, DisasterParams, SimSnapshot, UtilityAgentState } from '../core/types';
 import { generateCity } from '../sim/cityGen';
 import { buildNetwork } from '../sim/powerNetwork';
 
@@ -31,6 +31,20 @@ export class FixtureEngine {
     for (const e of Object.values(network.edges)) {
       e.flowKW = e.capacityKW * (e.tier === 'transmission' ? 0.3 + r.next() * 0.5 : 0.04 + r.next() * 0.5);
     }
+    // prosumers: rooftop houses (~30 %) and every school gets a campus install; their feeders export (reverse)
+    const pr = new Rng(seed + 9);
+    for (const b of Object.values(buildings)) {
+      if (b.kind === 'house' && pr.chance(0.3)) b.prosumer = { kind: 'rooftop', solarKWp: 6, batteryKWh: 10, batteryMaxKW: 3, survivalKW: 0.8 };
+      if (b.kind === 'school') b.prosumer = { kind: 'campus', solarKWp: 60, batteryKWh: 120, batteryMaxKW: 40, survivalKW: 12 };
+    }
+    const prosumerIds = new Set(Object.values(buildings).filter((b) => b.prosumer).map((b) => b.id));
+    for (const e of Object.values(network.edges)) {
+      const touches = [network.nodes[e.from], network.nodes[e.to]].some((n) => n?.buildingId && prosumerIds.has(n.buildingId));
+      if (touches) {
+        e.reverse = true;
+        e.flowKW = e.capacityKW * 0.12;
+      }
+    }
     this.snapshot = {
       tMin: 0,
       running: true,
@@ -46,6 +60,31 @@ export class FixtureEngine {
       history: [],
       log: [],
     };
+    this.updateDer();
+  }
+
+  /** Daylight curve for every prosumer: solar follows the clock, export is solar above a 1.2 kW base load. */
+  private updateDer(): void {
+    const s = this.snapshot;
+    const h = (START_HOUR + s.tMin / 60) % 24;
+    const day = Math.max(0, Math.sin((Math.PI * (h - 6)) / 12));
+    for (const b of Object.values(s.buildings)) {
+      if (!b.prosumer) continue;
+      const solar = b.prosumer.solarKWp * day * 0.85;
+      s.agents[b.id] = {
+        buildingId: b.id,
+        der: {
+          solarKW: solar,
+          batteryKWh: b.prosumer.batteryKWh,
+          batteryPct: 0.6,
+          generationKW: solar,
+          selfSupplyKW: Math.min(solar, b.prosumer.survivalKW),
+          offeredKW: Math.max(0, solar - b.prosumer.survivalKW),
+          exportedKW: Math.max(0, solar - 1.2),
+          curtailedKW: 0,
+        },
+      } as unknown as UtilityAgentState;
+    }
   }
 
   update(realDt: number): void {
@@ -74,6 +113,7 @@ export class FixtureEngine {
       if (s.tMin - d.startMin > d.durationMin) d.active = false;
     });
     this.refresh();
+    this.updateDer();
   }
 
   /** Re-derive node / edge / building state from cell statuses. */

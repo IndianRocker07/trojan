@@ -1,6 +1,6 @@
 # Trojan — Project Description
 
-Version 0.1 · 2026-11-14 · Status: **Phase 1 (Simulation layer) in build**; Phases 2–4 documented, not built.
+Version 0.1 · 2026-11-14 · Status: **Phases 1–3 built** (simulation, negotiation, safety, with the prosumer microgrid); Phase 4 (evaluation) future, headless bench exists.
 
 Companion documents: `PRD.md` (requirements and acceptance criteria), `SPEC.md` (technical source of truth —
 this document references it and does not duplicate its tables), `DESIGN.md` (UI and scene look),
@@ -22,8 +22,7 @@ and not a fixed rule table, (b) **fair**, because priority is balanced against f
 (c) **safe**, because an independent safety layer can veto anything that violates a hard limit.
 
 Trojan is built simulation-first. Before any agent negotiates, there must be a believable city, a real power
-network, real disasters and live telemetry for the agents to sense. That simulation (Layer 1) is what is
-being built now.
+network, real disasters and live telemetry for the agents to sense. That simulation (Layer 1) was built first; Layers 2 and 3 now run on top of it.
 
 ## 2. The problem
 
@@ -53,15 +52,15 @@ Three layers, built in order, each usable on its own:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│  LAYER 3 — SAFETY                                       (Phase 3, future)  │
+│  LAYER 3 — SAFETY                                       (Phase 3, built)   │
 │  ConstraintValidator: hard limits · physics · minSafe · fairness bound ·   │
 │  atomic commit · invariants · audit log.  Can VETO any allocation.         │
 ├───────────────────────────────────────────────────────────────────────────┤
-│  LAYER 2 — NEGOTIATION, BIDDING & PRIORITISATION        (Phase 2, future)  │
+│  LAYER 2 — NEGOTIATION, BIDDING & PRIORITISATION        (Phase 2, built)   │
 │  AllocationPolicy: utility agents bid with virtual tokens; dynamic         │
 │  priority score; counter-offers, concessions, forward contracts.           │
 ├───────────────────────────────────────────────────────────────────────────┤
-│  LAYER 1 — SIMULATION                                   (Phase 1, NOW)     │
+│  LAYER 1 — SIMULATION                                   (Phase 1, built)   │
 │  3D city on a 48×48 grid · buildings & utilities · power network (lines,   │
 │  pylons, poles) · disasters on grid blocks · live telemetry · clock/KPIs.  │
 └───────────────────────────────────────────────────────────────────────────┘
@@ -88,7 +87,7 @@ runs end to end and so later layers have something to be measured against.
 
 ## 4. The three layers
 
-### 4.1 Layer 1 — Simulation (base; the current phase)
+### 4.1 Layer 1 — Simulation (base; built)
 
 A complete, deterministic, pure-TypeScript model of a city under disaster, plus a 3D interface to watch and
 poke it. See SPEC §2–§9.
@@ -100,14 +99,13 @@ poke it. See SPEC §2–§9.
 | Power network | Generator → transmission (pylons, ring) → substations → distribution (poles along roads) → service drops. Edges have capacity; islands form when parts break. | §4 |
 | Disasters | Earthquake, flood, cyclone, fire, grid fault. Each writes **cell status**; any utility on a non-`ok` cell is fully off. | §7.3 |
 | Agents & telemetry | Every consumer has a utility agent that *senses and reports* (patients, reservoir level, call load…) and computes derived bid fields. | §6 |
-| Engine | One simulated minute per step; scenario is 12 h starting 16:00 local; speeds 1–60 sim-min per real second. | §7 |
+| Engine | One simulated minute per step; scenario is 24 h starting 10:00 local; speeds 1–60 sim-min per real second. | §7 |
 | 3D view and UI | Toon-shaded city, animated power flow, disaster FX, inspector, KPIs, event log. | §8, §9 |
 
-### 4.2 Layer 2 — Negotiation, bidding & prioritisation (future)
+### 4.2 Layer 2 — Negotiation, bidding & prioritisation (built)
 
 The decision layer. It is **not a pre-made rules layer**: priority and outcomes emerge from each round of
-bids, counter-offers and concessions given current telemetry. It uses a **priority-based virtual token
-mechanism, not real money**.
+bids, counter-offers and concessions given current telemetry. Priority is need-based; virtual tokens are a **secondary cooperation signal, never a priority currency and never real money**.
 
 - Each agent submits a **bid** derived from its power requirement, criticality, urgency, expected damage from
   power loss, and minimum safe power requirement.
@@ -121,9 +119,9 @@ mechanism, not real money**.
   hospitals (patients now, patients incoming, growth rate per hour, proximity to affected areas), and so on
   (SPEC §6.2).
 
-Design notes: SPEC §10. Requirements: PRD FR-2.x.
+Build spec: `docs/NEGOTIATION.md`. Summary: SPEC §10. Requirements: PRD FR-2.x.
 
-### 4.3 Layer 3 — Safety (future)
+### 4.3 Layer 3 — Safety (built)
 
 The guard rail. It ensures that negotiation can never bypass hard limits, that allocations respect physics
 (power balance, line and transformer capacity, backup energy) and that no inconsistent state is ever
@@ -131,12 +129,11 @@ committed. It runs after every allocation and has **veto power**. It also provid
 problem statement asks for: critical services get their minimum safe power if physically possible, fairness
 is bounded, and every decision is auditable.
 
-Design notes: SPEC §11. Requirements: PRD FR-3.x.
+Build spec: `docs/NEGOTIATION.md` §6. Summary: SPEC §11. Requirements: PRD FR-3.x.
 
 ## 5. The agents and what each senses
 
-Each consumer building is a **utility agent** (SPEC §6). In Phase 1 agents only sense and report; in Phase 2
-they bid and negotiate. Static profile values (base demand, minSafe fraction, criticality, backup, damage
+Each consumer building is a **utility agent** (SPEC §6). In Phase 1 agents only sensed and reported; from Phase 2 they bid and negotiate. Static profile values (base demand, minSafe fraction, criticality, backup, damage
 rate) are in SPEC §6.1 and are not repeated here.
 
 | Agent | Represents | Senses (live telemetry — keys in SPEC §6.2) | What drives its urgency |
@@ -149,9 +146,10 @@ rate) are in SPEC §6.1 and are not repeated here.
 | **House** | many 1×1 homes (clusters in Phase 2) | Occupants, medical-device flag, battery %, emergency requests/h, evacuated flag | Medical device, battery exhaustion |
 | *Substation / Generator* | Infrastructure, **not** consumers | Capacity, output, trip state, flow | Provide supply and routing; become negotiation constraints, not bidders |
 
+Hospital, water, emergency, telecom and school agents are **Jev-driven**: each has its own perception from TypeSafe Jev and falls back to a deterministic heuristic when Jev is unavailable. Household agents are per-cluster (same feeder substation and 6×6 city block) and never call Jev. Only affected utilities negotiate actively; the others cooperate or stay idle.
+
 All agents also sense `distanceToImpactM` (distance to the nearest non-`ok` cell). Every agent exposes the
-derived bid fields `urgency`, `expectedDamagePerHour` and a token balance (initially 100 each; unused in
-Phase 1).
+derived bid fields `urgency`, `expectedDamagePerHour` and a token balance (initially 100 each; spent and earned from Phase 2).
 
 ## 6. The virtual token economy (Layer 2 concept)
 
@@ -161,13 +159,14 @@ monetary value and never leave the simulation.
 | Concept | Idea |
 |---|---|
 | **Endowment** | Every agent starts with an equal balance (100 in SPEC §6.3). Equal start means priority differences must come from need, not wealth. |
-| **Spend to raise priority** | An agent may attach tokens to a bid to raise its priority score for this round — the way to say "I need this now". |
+| **Spend (secondary)** | An agent may attach a bounded amount of tokens to a bid as a secondary signal of willingness. The tokens are escrowed and charged only if the agent wins phase-2 power. |
 | **Earn by conceding** | Accepting less than requested, deferring load, shedding non-critical load or yielding to a more urgent agent earns tokens, proportional to the kW and duration conceded. |
 | **Forward contracts** | "I give you 200 kW now; you return 150 kW in hour 3." Tokens back the promise and are forfeited on default; the validator checks that contracts stay physically satisfiable. |
+| **Need, not wealth** | Tokens reward cooperation (verified concessions, deferred load, cooperative forward contracts) and carry a hard-capped weight in the priority score. They never influence the protected minimum-safe phase, so an agent with more tokens cannot outrank a more critical one (`agent_prompt.md`). |
 | **Anti-hoarding / fairness** | Priority subtracts a term for recently-served share, and token balances are bounded and decay slowly, so neither wealth nor a single early win can lock in permanent advantage. |
 | **Not a rule table** | Weights of the priority score adapt with crisis phase; outcomes come from the interaction of bids, not a lookup. |
 
-Formal token earn/spend rules are in PRD FR-2.x; the score formula is in SPEC §10.
+The implemented rules are in `docs/NEGOTIATION.md` §3–§4 (PRD FR-2.x); the score is summarised in SPEC §10.
 
 ## 7. The disaster model
 
@@ -187,6 +186,8 @@ Cell states: `ok`, `flooded`, `burning`, `destroyed`. Consequences are then casc
 dead nodes break edges, BFS from running generators yields **islands**, and an overloaded edge that stays over
 capacity for 3 minutes trips (SPEC §7.4). Parameters and formulas: SPEC §7.3. Scripted scenarios: SPEC §7.5.
 
+**Microgrid.** About 30% of houses have rooftop solar and a battery, and every school is a campus prosumer. A prosumer covers its own survival load first and offers only the surplus to its island. An island is any part of the network still connected to a generator or to prosumer exports, so a feeder cut off from its substation can keep running as a microgrid. Lines have limits, so exports that would overload a feeder are curtailed at the inverter instead of tripping the breaker. Utilities also pre-charge their buffers on midday surplus, coast on reserves after sunset, and inherit damage from the services that depend on them (water feeding hospitals, telecom feeding dispatch). See `docs/MICROGRID.md`.
+
 ## 8. What makes the system decentralized
 
 | Aspect | In Trojan |
@@ -203,7 +204,7 @@ processes or learners without UI changes.
 
 ## 9. Success metrics
 
-Measured over a full 12-hour scenario, per policy, per seed (full definitions and targets in PRD §9).
+Measured over a full 24-hour scenario, per policy, per seed (full definitions and targets in PRD §9).
 
 | Metric | Definition | Target direction |
 |---|---|---|
@@ -220,34 +221,35 @@ Measured over a full 12-hour scenario, per policy, per seed (full definitions an
 |---|---|
 | **Agent / utility agent** | Software representative of one consumer building; senses, reports (Phase 1), bids (Phase 2). |
 | **Allocation** | Power (kW) granted to a consumer for a minute (`allocatedKW`). |
-| **AllocationPolicy** | Engine interface that turns supply and requests into allocations. Baseline now; negotiation in Phase 2. |
+| **AllocationPolicy** | Engine interface that turns supply and requests into allocations. Baseline and negotiation (Phase 2) implementations. |
 | **Backup** | Local diesel/battery that covers a deficit while it lasts (SPEC §6.4). |
 | **Bid** | An agent's structured request for power, with its need and flexibility. |
 | **Brownout** | Served ≥ minSafe but < demand. |
 | **Cascade** | Chain of failures, e.g. overload trips causing further overloads. |
 | **Cell / grid block** | One 12 m square of the 48×48 grid; the unit a disaster affects. |
 | **Concession** | Voluntary acceptance of less power (or later power) in exchange for tokens. |
-| **ConstraintValidator** | Engine interface that checks/clamps/vetoes an allocation. Baseline now; safety layer in Phase 3. |
+| **ConstraintValidator** | Engine interface that checks/clamps/vetoes an allocation. Baseline clamping validator; the safety layer (Phase 3) implements it. |
 | **Criticality** | Static importance of a utility kind (0–1). |
 | **Damage** | Modelled harm units per hour of unserved demand (SPEC §6.1). |
 | **Feeder** | Chain of distribution edges from a substation to one consumer. |
 | **Forward contract** | Token-backed promise of future power in exchange for power now. |
-| **Island** | Connected part of the network fed by its own generators. |
+| **Island** | Connected part of the network with a generator or prosumer export as its source. |
 | **Jain's index** | Fairness measure, 1 = perfectly equal. |
 | **minSafe** | Minimum power (fraction of demand) needed to avoid serious harm. |
 | **Priority score** | Dynamic ranking value computed from a bid (SPEC §10). |
+| **Prosumer** | A building with rooftop solar (and usually a battery) that can export surplus to its island. |
 | **Service drop** | Final line from a pole to a building. |
-| **Token (virtual)** | Non-monetary currency for priority, concession and contracts. |
+| **Token (virtual)** | Non-monetary currency for concessions and contracts; never a priority purchase. |
 | **Urgency** | Kind-specific 0–1 measure of how acute the need is now. |
 
 ## 11. Phase roadmap
 
 | Phase | Name | Deliverable | Exit criterion |
 |---|---|---|---|
-| **1 (now)** | Simulation | 3D city, power network, 5 disasters, live telemetry, KPIs, scenarios, baseline policy/validator, deterministic engine | All four scenarios run deterministically; ≥ 50 fps; every utility type inspectable; Σ allocation ≤ supply every step |
-| **2** | Negotiation | Utility agents that bid, priority score, tokens, concessions, forward contracts, bounded rounds; implements `AllocationPolicy` | Beats baseline on total damage in all scenarios; negotiation visible in UI |
-| **3** | Safety | Constraint validator with hard limits, physics, minSafe guarantee, fairness bound, atomic commits, invariants, audit log; implements `ConstraintValidator` | 0 violations across fuzzed runs; zero cascades from allocation-induced overload |
-| **4** | Evaluation & benchmarks | Headless batch runner; baselines (proportional, static priority, baseline critical-first); report with the §9 metrics across seeds and scenarios | Reproducible report; statistically supported comparison |
+| **1 (built)** | Simulation | 3D city, power network, 5 disasters, live telemetry, KPIs, scenarios, baseline policy/validator, deterministic engine | All four scenarios run deterministically; ≥ 50 fps; every utility type inspectable; Σ allocation ≤ supply every step |
+| **2 (built)** | Negotiation | Utility agents that bid, priority score, tokens, concessions, forward contracts, bounded rounds; implements `AllocationPolicy` | Beats baseline on total damage in all scenarios; negotiation visible in UI |
+| **3 (built)** | Safety | Constraint validator with hard limits, physics, minSafe guarantee, fairness bound, atomic commits, invariants, audit log; implements `ConstraintValidator` | 0 violations across fuzzed runs; zero cascades from allocation-induced overload |
+| **4 (future)** | Evaluation & benchmarks | Headless batch runner; baselines (proportional, static priority, baseline critical-first); report with the §9 metrics across seeds and scenarios | Reproducible report; statistically supported comparison |
 
 ## 12. Tech stack
 
@@ -257,6 +259,8 @@ Measured over a full 12-hour scenario, per policy, per seed (full definitions an
 | 3D | Three.js r187 — procedural models (no external assets), toon shading, instancing and merged geometry |
 | UI | Plain DOM + CSS custom properties; hand-written canvas charts and sparklines; no UI framework (DESIGN.md §8) |
 | Simulation | Pure TypeScript in `src/sim/**` — no `three`, no DOM; runs in Node (e.g. `npx tsx`) |
+| Negotiation perception | `@typesafe-ai/sdk` (TypeSafe Jev, System-1), Node only; the browser reaches it through the Vite `/api/jev` proxy; key in `.env.local` |
+| Scripts | `tsx` runs the Node tests and bench: `npm test`, `npm run bench` |
 | Randomness | Seeded `Rng`; same seed + same events ⇒ identical run |
 | Tooling | `npm run typecheck`; `scripts/shot.mjs` for visual review; `models.html` model gallery |
 | Fonts | Inter Tight, Inter, JetBrains Mono (Google Fonts) |

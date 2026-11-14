@@ -1,0 +1,131 @@
+/* ───────────── collapsible controls ─────────────
+   Mobile dock ("Panels"), layer pill ("Layers"), and the desktop Disasters panel / Inspector / Stats strip
+   start collapsed. Imported last by hud.ts, so equal-specificity rules here win over styles.css and ux.css.
+   Open and closed states are data attributes (data-open / data-collapsed / aria-expanded), set in hud.ts. */
+
+/* ── layer pill (all widths) ── */
+.hud .layer-pill .pill-toggle {
+  height: 44px;
+}
+.hud .layers-toggle {
+  min-width: 44px;
+  padding: 0 8px;
+  justify-content: center;
+}
+.hud .layers-glyph {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.hud .chev-ic {
+  display: inline-flex;
+}
+.hud .chev-ic svg {
+  transition: transform var(--dur) var(--pop);
+}
+.hud .layers-toggle[aria-expanded='true'] .chev-ic svg {
+  transform: rotate(180deg);
+}
+/* collapsed: only the Layers button shows; P and W still toggle the layers from the keyboard */
+.hud .layer-pill[data-open='false'] .pill-toggle:not(.layers-toggle) {
+  display: none;
+}
+
+/* ── desktop panels: a collapsed card shrinks to its header instead of stretching ── */
+.hud .rail-left > .disasters[data-collapsed='true'] {
+  flex: none;
+}
+
+/* ── mobile / tablet: dock and layer pill ── */
+@media (max-width: 959px) {
+  .hud .layer-pill {
+    bottom: 76px;
+  }
+  .hud .layer-pill[data-open='true'] {
+    flex-direction: column;
+    border-radius: 16px;
+  }
+  .hud .layer-pill[data-open='true'] .pill-toggle + .pill-toggle {
+    border-left: 0;
+    border-top: var(--border-w) solid var(--ink);
+  }
+
+  /* collapsed: the dock is just the Panels button, bottom-left; open: a row of the four panel buttons */
+  .hud .dock {
+    height: auto;
+    right: auto;
+    align-items: center;
+    gap: 8px;
+  }
+  .hud .dock[data-open='true'] {
+    right: 10px;
+  }
+  .hud .dock-toggle {
+    flex: none;
+    height: 44px;
+    min-width: 44px;
+    padding: 0 12px;
+    font-size: 14px;
+    box-shadow: var(--shadow);
+  }
+  .hud .dock-toggle[aria-expanded='true'] {
+    width: 44px;
+    padding: 0;
+    background: var(--accent);
+  }
+  .hud .dock-ic {
+    display: inline-flex;
+  }
+  .hud .dock-toggle .close-ic,
+  .hud .dock-toggle[aria-expanded='true'] .menu-ic,
+  .hud .dock-toggle[aria-expanded='true'] .dock-toggle-text {
+    display: none;
+  }
+  .hud .dock-toggle[aria-expanded='true'] .close-ic {
+    display: inline-flex;
+  }
+  .hud .dock-items {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    gap: 8px;
+    animation: dock-in var(--dur) var(--ease);
+  }
+  .hud .dock-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 56px;
+    padding: 4px 2px;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 13px;
+    line-height: 1.1;
+    box-shadow: var(--shadow);
+  }
+  .hud .dock-btn span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+@media (max-width: 359px) {
+  .hud .dock-btn {
+    font-size: 12px;
+  }
+}
+
+@keyframes dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud .dock-items {
+    animation: none;
+  }
+}

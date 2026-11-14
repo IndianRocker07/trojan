@@ -7,4 +7,5 @@ export { SCENARIOS, getScenario, type Scenario, type ScenarioEvent } from './sce
 export type { SimDisasterParams } from './disasters';
 export { KIND_PROFILES } from './profiles';
 export { hourOf } from './telemetry';
+export { MicrogridTopology, daylight, EXPORT_MARGIN } from './microgrid';
 export { buildWaterNetwork, updateWaterNetwork, waterSourceId, waterConsumerId } from './waterNetwork';

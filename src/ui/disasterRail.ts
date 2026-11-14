@@ -3,6 +3,26 @@ import { GRID_COLS, GRID_ROWS } from '../core/constants';
 import { DEFAULT_LAYERS, type LayerName } from './contracts';
 import { fmtDuration } from './format';
 import { button, h, icon, keyChip, panel, setText, slider, type IconName } from './widgets';
+import './rail.css';
+
+/** Smallest height the active card's list may take before the whole left column scrolls instead (px). */
+const MIN_LIST = 220;
+
+type LayerGlyph = 'grid' | 'flow' | 'labels' | 'status';
+
+/** Inline 2 px ink strokes, drawn in currentColor so the chip's state colour carries through. */
+const GLYPHS: Record<LayerGlyph, string> = {
+  grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  flow: '<path d="M3.5 12h12.5"/><path d="M11 6.5l5.5 5.5-5.5 5.5"/>',
+  labels: '<path d="M4 4h8l8 8-8 8-8-8z"/><circle cx="8.5" cy="8.5" r="1.3"/>',
+  status: '<circle cx="12" cy="12" r="8.5"/><path d="M8 12.5l2.7 2.7L16 9.5"/>',
+};
+
+function glyph(g: LayerGlyph): SVGElement {
+  const w = document.createElement('span');
+  w.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round">${GLYPHS[g]}</svg>`;
+  return w.firstElementChild as SVGElement;
+}
 
 interface Def {
   kind: DisasterKind;
@@ -35,8 +55,22 @@ export interface RailCallbacks {
   onLayer(name: LayerName, on: boolean): void;
 }
 
+/**
+ * Publish the real bottom edge of the floating top bar as `--topbar-bottom` on the HUD root. The bar wraps onto
+ * several rows on narrow screens, so the rails and sheets cannot assume a fixed height.
+ */
+function trackTopbar(hud: HTMLElement): void {
+  const bar = hud.querySelector<HTMLElement>('.topbar');
+  if (!bar) return;
+  const apply = () => hud.style.setProperty('--topbar-bottom', `${Math.ceil(bar.getBoundingClientRect().bottom)}px`);
+  apply();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(apply).observe(bar);
+  window.addEventListener('resize', apply);
+}
+
 export class DisasterRail {
   readonly el: HTMLElement;
+  private tracked = false;
   private intensity;
   private radius;
   private rows = new Map<DisasterKind, { row: HTMLElement; btn: HTMLButtonElement; label: HTMLElement }>();
@@ -64,25 +98,34 @@ export class DisasterRail {
     const sliders = h('div', 'sliders', this.intensity.el, this.radius.el);
     const list = h('div', 'disaster-list');
     for (const d of DEFS) list.append(this.buildRow(d));
-    dp.body.append(
-      this.pickBanner,
-      sliders,
+    // Sliders stay pinned; the list and the active events share one scroll region inside the card.
+    const scroll = h(
+      'div',
+      { class: 'dr-scroll', tabindex: 0, role: 'region', 'aria-label': 'Disaster list and active events' },
       list,
       this.activeTitle,
       this.activeEmpty,
       this.activeList,
     );
+    dp.body.classList.add('dr-body');
+    dp.body.append(this.pickBanner, sliders, scroll);
 
     const lp = panel({ title: 'Layers', cls: 'layers-panel', collapsible: false });
-    const grid = h('div', 'layer-grid');
-    const L: { name: LayerName; label: string; key: string }[] = [
-      { name: 'grid', label: 'Grid', key: 'G' },
-      { name: 'flow', label: 'Power flow', key: 'F' },
-      { name: 'labels', label: 'Labels', key: 'L' },
-      { name: 'status', label: 'Status', key: 'S' },
+    const grid = h('div', { class: 'layer-grid', role: 'group', 'aria-label': 'Map layers' });
+    const L: { name: LayerName; label: string; full: string; key: string; g: LayerGlyph }[] = [
+      { name: 'grid', label: 'Grid', full: 'Grid', key: 'G', g: 'grid' },
+      { name: 'flow', label: 'Flow', full: 'Power flow', key: 'F', g: 'flow' },
+      { name: 'labels', label: 'Labels', full: 'Labels', key: 'L', g: 'labels' },
+      { name: 'status', label: 'Status', full: 'Status', key: 'S', g: 'status' },
     ];
     for (const l of L) {
-      const b = h('button', { class: 'toggle', type: 'button', 'aria-pressed': String(this.layers[l.name]) }, h('span', { text: l.label }), keyChip(l.key));
+      // The key moves into the tooltip and aria-keyshortcuts; the keyboard shortcut itself is unchanged (hud.ts).
+      const b = h(
+        'button',
+        { class: 'layer-chip', type: 'button', 'aria-pressed': String(this.layers[l.name]), title: `${l.full} (${l.key})`, 'aria-keyshortcuts': l.key },
+        glyph(l.g),
+        h('span', { text: l.label }),
+      );
       b.addEventListener('click', () => this.setLayer(l.name, !this.layers[l.name]));
       this.layerBtns.set(l.name, b);
       grid.append(b);
@@ -103,6 +146,64 @@ export class DisasterRail {
     this.pill = pill;
 
     this.el = h('aside', { class: 'rail rail-left', 'aria-label': 'Disaster tools' }, dp.el, lp.el);
+    this.observeFit();
+  }
+
+  /**
+   * Left column height logic. Desktop only: the tall card (Disasters or Live negotiation) takes the leftover height
+   * with a MIN_LIST floor, so its list is the one scroller. If that floor does not fit, the card goes to natural
+   * height and the whole column scrolls instead. The mode is a class on the column (rail.css decides the styles).
+   */
+  private fitQueued = false;
+
+  private observeFit() {
+    // The column's own size is fixed by its top/bottom offsets, so resizing it cannot feed back into this observer.
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.scheduleFit()).observe(this.el);
+    // Content changes (active events, feed messages) and hidden/collapsed toggles change the card's natural height.
+    // Only childList and these two attributes are watched, so the class and style writes in fit() cannot loop.
+    if (typeof MutationObserver !== 'undefined') {
+      new MutationObserver(() => this.scheduleFit()).observe(this.el, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['hidden', 'data-collapsed'],
+      });
+    }
+    this.scheduleFit();
+  }
+
+  private scheduleFit() {
+    if (this.fitQueued) return;
+    this.fitQueued = true;
+    requestAnimationFrame(() => {
+      this.fitQueued = false;
+      this.fit();
+    });
+  }
+
+  private mainCard(): HTMLElement | null {
+    if (!window.matchMedia('(min-width: 960px)').matches) return null;
+    const cards = [...this.el.children] as HTMLElement[];
+    return (
+      cards.find((c) => (c.classList.contains('disasters') || c.classList.contains('feed-panel')) && !c.hidden && c.dataset.collapsed !== 'true') ?? null
+    );
+  }
+
+  private fit() {
+    const col = this.el;
+    col.classList.remove('rail-fit', 'rail-stack');
+    const card = this.mainCard();
+    if (!card) return;
+    const region = card.querySelector<HTMLElement>(card.classList.contains('disasters') ? '.dr-scroll' : '.fd-list');
+    if (!region) return;
+    // Fit mode: the card may shrink to chrome + MIN_LIST. Chrome is measured from the live card, so banners and
+    // headers that appear or disappear are picked up on the next pass.
+    col.classList.add('rail-fit');
+    card.style.setProperty('--rail-min', `${card.offsetHeight - region.offsetHeight + MIN_LIST}px`);
+    // The feed never switches to column scroll: its auto-scroll and "New messages" cue need its own list to scroll.
+    if (!card.classList.contains('feed-panel') && col.scrollHeight > col.clientHeight + 1) {
+      col.classList.replace('rail-fit', 'rail-stack');
+    }
   }
 
   private buildRow(d: Def): HTMLElement {
@@ -213,6 +314,14 @@ export class DisasterRail {
   }
 
   update(s: SimSnapshot) {
+    if (!this.tracked) {
+      // First refresh runs after the HUD is attached, so the top bar can be measured.
+      const hud = this.el.closest<HTMLElement>('.hud');
+      if (hud) {
+        this.tracked = true;
+        trackTopbar(hud);
+      }
+    }
     this.refreshTargets(s);
     const active = s.disasters.filter((d) => d.active);
     const ids = new Set(active.map((d) => d.id));
