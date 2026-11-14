@@ -1,6 +1,6 @@
 /**
  * Render test page. /render-test.html
- *   ?t=<sim minutes to fast-forward>   ?disaster=earthquake|flood|cyclone|fire   ?cam=city|close|top|low
+ *   ?t=<sim minutes to fast-forward>   ?disaster=earthquake|flood|cyclone|fire   ?cam=city|close|top|low|edge|horizon|meadow|far
  *   ?focus=<buildingId or kind>        ?grid=1 ?labels=0 ?flow=0   ?fixture=1 (force the fixture engine)
  *   keys: G grid, F flow, L labels, 1-5 trigger earthquake/flood/cyclone/fire/grid-fault at a random spot
  */
@@ -85,6 +85,11 @@ async function main() {
   const info = fb ? world.buildingInfo?.get(fb.id) : undefined;
   if (cam === 'top') world.setView({ azimuth: 0, elevation: 69, distance: 760 });
   else if (cam === 'low') world.setView({ azimuth: 30, elevation: 28, distance: 520 });
+  // landscape checks: board edge seam, far horizon, meadow at ground level, a lane leaving the city
+  else if (cam === 'edge') world.setView({ azimuth: 45, elevation: 24, distance: 420, target: { x: 270, z: 270 } });
+  else if (cam === 'horizon') world.setView({ azimuth: 200, elevation: 16, distance: 1100, target: { x: 0, z: 0 } });
+  else if (cam === 'meadow') world.setView({ azimuth: 10, elevation: 16, distance: 140, target: { x: 40, z: 300 } });
+  else if (cam === 'far') world.setView({ azimuth: 45, elevation: 34, distance: 1150, target: { x: 0, z: 0 } });
   else if (cam === 'close' || info) {
     const x = info?.cx ?? Number(q.get('x') ?? 0);
     const z = info?.cz ?? Number(q.get('z') ?? 0);

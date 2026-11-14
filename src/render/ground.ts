@@ -7,7 +7,6 @@ import { makeGrassDetailTexture } from './terrainTexture';
 /** Top surface height of each terrain type (m). Buildings stand on LOT_Y. */
 export const LOT_Y = 0.18;
 export const TOP_Y: Record<Terrain, number> = { land: LOT_Y, park: LOT_Y, road: 0, bridge: 0, river: -1.1 };
-const BOARD_BOTTOM = -7;
 
 type V3 = [number, number, number];
 
@@ -123,7 +122,8 @@ export function buildGround(cells: GridCell[]): Ground {
     ];
     for (const [nc, nr, p0, p1, , , n] of nbs) {
       const nb = at(nc, nr);
-      const ny = nb ? TOP_Y[nb.terrain] : BOARD_BOTTOM;
+      // no wall at the board perimeter: the env terrain continues flush from the edge
+      const ny = nb ? TOP_Y[nb.terrain] : terrain === 'bridge' ? -1.7 : y;
       let yTop = y;
       let yBot = ny;
       if (terrain === 'bridge' && nb?.terrain === 'river') yBot = -1.7; // thick deck
@@ -153,10 +153,8 @@ export function buildGround(cells: GridCell[]): Ground {
     const right = at(col + 1, row);
     const down = at(col, row + 1);
     const ly = (o: GridCell | undefined) => Math.max(y, o ? TOP_Y[o.terrain] : y) + 0.03;
-    if (!right || cls(right) !== k) lines.push(x1, ly(right), z0, x1, ly(right), z1);
-    if (!down || cls(down) !== k) lines.push(x0, ly(down), z1, x1, ly(down), z1);
-    if (col === 0) lines.push(x0, y + 0.03, z0, x0, y + 0.03, z1);
-    if (row === 0) lines.push(x0, y + 0.03, z0, x1, y + 0.03, z0);
+    if (right && cls(right) !== k) lines.push(x1, ly(right), z0, x1, ly(right), z1);
+    if (down && cls(down) !== k) lines.push(x0, ly(down), z1, x1, ly(down), z1);
 
     // road markings
     if (terrain === 'road' || terrain === 'bridge') {

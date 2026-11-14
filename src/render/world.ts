@@ -9,7 +9,7 @@ import { buildGround, type Ground } from './ground';
 import { Labels } from './labels';
 import { PowerLines } from './lines';
 import { ModelLib } from './modelLib';
-import { buildMountains, type Mountains } from './mountains';
+import { buildEnvironment, type Environment } from './env';
 import { Overlays } from './overlays';
 import { WaterLayer } from './water';
 import { Picker } from './picking';
@@ -58,7 +58,8 @@ export class WorldView extends Emitter<WorldEvents> {
   private ro: ResizeObserver;
 
   private ground: Ground | null = null;
-  private mountains: Mountains | null = null;
+  private env: Environment | null = null;
+  private nightF = 0;
   private batch: BuildingBatch | null = null;
   private scatter: Scatter | null = null;
   private lines: PowerLines | null = null;
@@ -106,8 +107,6 @@ export class WorldView extends Emitter<WorldEvents> {
     this.scene.background = CREAM.clone();
     this.scene.fog = new THREE.Fog(CREAM.clone(), 1400, 3600);
     this.scene.add(this.hemi, this.sun, this.sun.target);
-    this.mountains = buildMountains();
-    this.scene.add(this.mountains.group);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(SHADOW_SIZE, SHADOW_SIZE);
     Object.assign(this.sun.shadow.camera, { left: -450, right: 450, top: 450, bottom: -450, near: 10, far: 2800 });
@@ -171,6 +170,10 @@ export class WorldView extends Emitter<WorldEvents> {
 
     this.ground = buildGround(s.cells);
     this.scene.add(this.ground.group);
+
+    this.env = buildEnvironment(s.cells);
+    this.scene.add(this.env.group);
+    this.env.setNight(this.nightF);
 
     this.batch = new BuildingBatch(infosAll, this.lib);
     this.scene.add(this.batch.group);
@@ -314,8 +317,6 @@ export class WorldView extends Emitter<WorldEvents> {
     this.renderer.setAnimationLoop(null);
     this.ro.disconnect();
     this.teardown();
-    this.mountains?.dispose();
-    this.mountains = null;
     this.picker.dispose();
     this.labels.dispose();
     this.controls.dispose();
@@ -328,6 +329,8 @@ export class WorldView extends Emitter<WorldEvents> {
   private teardown(): void {
     this.built = false;
     this.ground?.dispose();
+    this.env?.dispose();
+    this.env = null;
     this.batch?.dispose();
     this.scatter?.dispose();
     this.lines?.dispose();
@@ -383,6 +386,8 @@ export class WorldView extends Emitter<WorldEvents> {
     (this.scene.background as THREE.Color).copy(bg);
     (this.scene.fog as THREE.Fog).color.copy(bg);
     this.scatter?.setNight(1 - dayF);
+    this.nightF = 1 - dayF;
+    this.env?.setNight(this.nightF);
     this.renderer.shadowMap.needsUpdate = true;
   }
 
@@ -445,11 +450,21 @@ export class WorldView extends Emitter<WorldEvents> {
     tg.z = THREE.MathUtils.clamp(tg.z, -HALF_D * 1.05, HALF_D * 1.05);
     tg.y = 0;
     this.controls.update();
+    // never let the camera sink into the surrounding hills
+    if (this.env) {
+      const cp = this.camera.position;
+      const floor = this.env.field.height(cp.x, cp.z) + 30;
+      if (cp.y < floor) {
+        cp.y = floor;
+        this.camera.lookAt(tg);
+      }
+    }
 
     this.stepFade(dt);
     const camDist = this.camera.position.distanceTo(this.controls.target);
     this.labels.setDistance(camDist);
     this.lines?.setWidthScale(THREE.MathUtils.clamp(300 / camDist, 0.5, 1.4));
+    this.env?.update(dt, this.t, this.camera);
     this.batch?.update(dt, this.t);
     this.waterLayer?.update(dt, this.fade.water > 0.01);
     this.lines?.update(dt);
