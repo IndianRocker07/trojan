@@ -25,8 +25,11 @@ import type {
   EngineEvents,
   GeneratorState,
   GridCell,
+  IslandContext,
+  IslandInfo,
   LogEntry,
   Metrics,
+  PowerEdge,
   SimSnapshot,
 } from '../core/types';
 import { type AgentRuntime, applyBackupAndStatus, createAgents } from './agents';
@@ -40,8 +43,9 @@ import {
   stepDisaster,
 } from './disasters';
 import { BaselinePolicy, BaselineValidator } from './policy';
-import { type Island, buildNetwork, computeIslands } from './powerNetwork';
-import { buildWaterNetwork, updateWaterNetwork, waterConsumerId, waterSourceId } from './waterNetwork';
+import { type Island, buildNetwork, computeIslands, powerNodeIndex } from './powerNetwork';
+import { type IslandPlan, MicrogridTopology, daylight, finalizeProsumer, prepareProsumer, setSelfSupply } from './microgrid';
+import { buildWaterNetwork, updateWaterNetwork, waterConsumerId, waterIndex, waterSourceId } from './waterNetwork';
 import { SCENARIOS, type Scenario } from './scenarios';
 import { TelemetryState, computeDemand, hourOf } from './telemetry';
 
@@ -50,8 +54,6 @@ const NCELLS = GRID_COLS * GRID_ROWS;
 export const PEAK_LOAD_FACTOR = 0.88;
 const THERMAL_SHARE = 0.62;
 const OVERLOAD_MINUTES = 3;
-
-const daylight = (h: number) => (h >= 6 && h <= 19 ? Math.sin(((h - 6) / 13) * Math.PI) : 0);
 
 export interface EngineOptions {
   seed?: number;
@@ -74,6 +76,15 @@ export class SimEngine extends Emitter<EngineEventMap> {
 
   private agents: Record<string, AgentRuntime> = {};
   private list: AgentRuntime[] = [];
+  /** cached iteration orders (the city never changes after build) */
+  private bList: Building[] = [];
+  private bAgent: Array<AgentRuntime | undefined> = [];
+  private infraB: Building[] = [];
+  private edgeList: PowerEdge[] = [];
+  private aNode: Int32Array = new Int32Array(0);
+  private wCons: Int32Array = new Int32Array(0);
+  private wSrc: Int32Array = new Int32Array(0);
+  private wDem: Float64Array = new Float64Array(0);
   private tele = new TelemetryState();
   private runtimes: DisasterRuntime[] = [];
   private layers: DisasterLayers = {
@@ -90,6 +101,19 @@ export class SimEngine extends Emitter<EngineEventMap> {
   private down = new Set<string>();
   private destroyedB = new Set<string>();
   private islands: Island[] = [];
+  private infos: IslandInfo[] = [];
+  private plans: IslandPlan[] = [];
+  private topo!: MicrogridTopology;
+  /** persistent island ids: building id → id it had last step; ids are never reused within a run */
+  private prevIslandOf = new Map<string, number>();
+  private prevIslandIds = new Set<number>();
+  private nextIslandId = 0;
+  private sources = new Set<string>();
+  /** last step's generator load factor (dispatched / available) — drives fuel burn */
+  private genLoad = new Map<string, number>();
+  private cyclone = false;
+  private lastDaylight = 0;
+  private lastCurtailLog = -1e9;
   private tAdj = new Map<string, string[]>();
   private impD: number[] = [];
   private impB: number[] = [];
@@ -165,7 +189,7 @@ export class SimEngine extends Emitter<EngineEventMap> {
     }
     if (s.tMin >= SCENARIO_MINUTES && s.running) {
       s.running = false;
-      this.log('info', 'Scenario complete (12 h)');
+      this.log('info', 'Scenario complete (24 h)');
     }
     if (did > 0) this.emit('tick', s);
   }
@@ -210,12 +234,29 @@ export class SimEngine extends Emitter<EngineEventMap> {
   getIslands(): ReadonlyArray<Island> {
     return this.islands;
   }
+  /** Current islands with their supply breakdown (P_total, prosumer, curtailment, line limit). Same objects as snapshot.islands. */
+  getIslandInfos(): ReadonlyArray<IslandInfo> {
+    return this.infos;
+  }
 
   setPolicy(p: AllocationPolicy): void {
     this.policy = p;
+    p.reset?.();
+    this.snapshot.negotiation = undefined;
+    for (const a of this.list) a.s.tokens = 100;
+    this.log('info', `Allocation policy → ${p.name}`);
   }
   setValidator(v: ConstraintValidator): void {
     this.validator = v;
+    v.reset?.();
+    this.snapshot.safety = undefined;
+    this.log('info', `Constraint validator → ${v.name}`);
+  }
+  getPolicy(): AllocationPolicy {
+    return this.policy;
+  }
+  getValidator(): ConstraintValidator {
+    return this.validator;
   }
 
   /** Start a disaster now. */
@@ -242,12 +283,21 @@ export class SimEngine extends Emitter<EngineEventMap> {
         this.tAdj.get(n)!.push(e.id);
       }
     }
-    this.agents = createAgents(city.buildings, new Rng((seed ^ 0x77aa55) >>> 0));
+    // (separate Rng streams for the DER state: the layout / agent streams stay identical to the pre-microgrid sim)
+    this.agents = createAgents(city.buildings, new Rng((seed ^ 0x77aa55) >>> 0), new Rng((seed ^ 0xd3a0c1) >>> 0));
     this.list = Object.values(this.agents);
+    this.bList = Object.values(city.buildings);
+    this.bAgent = this.bList.map((b) => this.agents[b.id]);
+    this.infraB = this.bList.filter((b) => b.kind === 'substation' || b.kind === 'generator');
+    this.edgeList = Object.values(s.network.edges);
+    const pni = powerNodeIndex(s.network);
+    this.aNode = Int32Array.from(this.list, (a) => pni.get(a.b.nodeId!)!);
+    this.wCons = new Int32Array(0); // (re)built lazily by updateWater
     s.agents = {};
     for (const a of this.list) s.agents[a.b.id] = a.s;
     this.tele = new TelemetryState();
-    this.tele.init(this.list, city.cells);
+    this.tele.init(this.list, city.cells, s.water);
+    this.topo = new MicrogridTopology(s.network, city.buildings, this.list, new Rng((seed ^ 0xc10d5e) >>> 0));
 
     // generator calibration: total capacity such that the evening-peak demand is PEAK_LOAD_FACTOR of it
     let peak = 0;
@@ -274,6 +324,7 @@ export class SimEngine extends Emitter<EngineEventMap> {
     s.disasters = [];
     s.history = [];
     s.log = [];
+    s.islands = [];
     this.acc = 0;
     this.evN = 0;
     this.runtimes = [];
@@ -286,6 +337,16 @@ export class SimEngine extends Emitter<EngineEventMap> {
     this.recover.clear();
     this.down.clear();
     this.islands = [];
+    this.infos = [];
+    this.plans = [];
+    this.prevIslandOf.clear();
+    this.prevIslandIds.clear();
+    this.nextIslandId = 0;
+    this.sources.clear();
+    this.genLoad.clear();
+    this.cyclone = false;
+    this.lastDaylight = daylight(hourOf(0));
+    this.lastCurtailLog = -1e9;
     this.impD = [];
     this.impB = [];
     this.disasterStarted = false;
@@ -301,6 +362,10 @@ export class SimEngine extends Emitter<EngineEventMap> {
     this.waterOk = 1;
     this.cumulativeDamage = 0;
     for (const c of city.cells) c.status = 'ok';
+    this.policy.reset?.();
+    this.validator.reset?.();
+    s.negotiation = undefined;
+    s.safety = undefined;
 
     // initial state: one pass of the pipeline at t=0 without advancing time, so the first snapshot is coherent
     this.pipeline(false);
@@ -366,11 +431,22 @@ export class SimEngine extends Emitter<EngineEventMap> {
     // 3. generators
     this.updateGenerators(advance);
 
-    // 4. connectivity & islands
-    const { islands, connected } = computeIslands(s.network, s.cells, s.buildings, s.generators, this.down, this.trippedEdges);
-    this.islands = islands;
-    for (const a of this.list) a.s.connected = !a.down && connected.has(a.b.id);
+    // 3b. prosumer DER: sun, p_min self-supply, battery capability (uses last step's demand for p_min)
+    const hour = hourOf(t);
+    for (const a of this.topo.prosumers) prepareProsumer(a, this.topo, t, hour, this.cyclone);
+    this.sources.clear();
+    for (const a of this.topo.prosumers) if (!a.down && a.plan!.potential) this.sources.add(a.b.id);
+
+    // 4. connectivity & islands (components of G(t) with a generator or a prosumer source)
+    const ci = computeIslands(s.network, s.cells, s.buildings, s.generators, this.down, this.trippedEdges, this.sources);
+    this.islands = ci.islands;
+    this.assignIslandIds();
+    const reached = ci.reached;
+    const L0 = this.list;
+    for (let i = 0; i < L0.length; i++) L0[i].s.connected = !L0[i].down && reached[this.aNode[i]] === 1;
+    this.topo.refreshReach();
     this.logConnectivity();
+    this.logSunset(hour);
 
     // 5. telemetry, demand, urgency
     this.tele.update({
@@ -389,6 +465,9 @@ export class SimEngine extends Emitter<EngineEventMap> {
     this.impB = [];
     this.disasterStarted = false;
     this.badChanged = false;
+
+    // 5b. island supply: prosumer plans, per-edge curtailment, P_total = min(DER + prosumer, line limit)
+    this.buildSupply();
 
     // 6. allocation per island
     this.allocate();
@@ -465,7 +544,21 @@ export class SimEngine extends Emitter<EngineEventMap> {
     const s = this.snapshot;
     this.down.clear();
     this.destroyedB.clear();
-    for (const b of Object.values(s.buildings)) {
+    const bl = this.bList;
+    const ba = this.bAgent;
+    if (this.badCells.length === 0 && this.recover.size === 0) {
+      // nothing damaged and nothing recovering: every building is up
+      for (let i = 0; i < ba.length; i++) {
+        const a = ba[i];
+        if (a) {
+          a.down = false;
+          a.destroyed = false;
+        }
+      }
+      return;
+    }
+    for (let i = 0; i < bl.length; i++) {
+      const b = bl[i];
       let destroyed = false;
       let bad = false;
       for (const cid of b.cells) {
@@ -484,7 +577,7 @@ export class SimEngine extends Emitter<EngineEventMap> {
         }
       }
       if (isDown) this.down.add(b.id);
-      const a = this.agents[b.id];
+      const a = ba[i];
       if (a) {
         a.down = isDown;
         a.destroyed = destroyed;
@@ -501,7 +594,10 @@ export class SimEngine extends Emitter<EngineEventMap> {
     const s = this.snapshot;
     const hour = hourOf(s.tMin);
     const cyclone = this.runtimes.some((r) => r.ev.kind === 'cyclone' && r.ev.active);
+    this.cyclone = cyclone; // prosumer rooftop solar sees the same x0.2 as the solar farm
     for (const g of Object.values(s.generators)) {
+      // fuel burn follows the dispatched load (prosumer exports are dispatched first and save fuel)
+      const burn = Math.max(0.25, this.genLoad.get(g.buildingId) ?? 1) / 60;
       const b = s.buildings[g.buildingId];
       const destroyed = this.destroyedB.has(b.id);
       const until = this.tripUntil.get(g.buildingId);
@@ -520,13 +616,13 @@ export class SimEngine extends Emitter<EngineEventMap> {
         const nz = advance ? prev + (this.rng.range(-0.03, 0.03) - prev) * 0.35 : prev;
         this.genNoise.set(g.buildingId, nz);
         out = g.capacityKW * (1 + nz);
-        if (advance) g.fuelHours = Math.max(0, g.fuelHours - 1 / 60);
+        if (advance) g.fuelHours = Math.max(0, g.fuelHours - burn);
         if (g.fuelHours <= 0) out = 0;
       } else {
         const d = daylight(hour);
         let frac = g.fuelHours > 0 ? 0.78 + 0.22 * d : d;
         if (cyclone) frac *= 0.2;
-        if (advance && d < 0.5) g.fuelHours = Math.max(0, g.fuelHours - 1 / 60);
+        if (advance && d < 0.5) g.fuelHours = Math.max(0, g.fuelHours - burn);
         out = g.capacityKW * frac;
       }
       g.outputKW = Math.max(0, out);
@@ -548,10 +644,12 @@ export class SimEngine extends Emitter<EngineEventMap> {
 
   private logConnectivity(): void {
     const s = this.snapshot;
-    if (this.islands.length !== this.lastIslandCount) {
-      if (this.islands.length > this.lastIslandCount) this.log('warn', `Grid split into ${this.islands.length} islands`);
-      else if (this.islands.length < this.lastIslandCount) this.log('info', `Grid islands merged: ${this.islands.length} remaining`);
-      this.lastIslandCount = this.islands.length;
+    // (utility-fed islands only; prosumer microgrids are logged separately when they form)
+    const gridIslands = this.islands.reduce((n, i) => n + (i.microgrid ? 0 : 1), 0);
+    if (gridIslands !== this.lastIslandCount) {
+      if (gridIslands > this.lastIslandCount) this.log('warn', `Grid split into ${gridIslands} islands`);
+      else this.log('info', `Grid islands merged: ${gridIslands} remaining`);
+      this.lastIslandCount = gridIslands;
     }
     let homesDark = 0;
     for (const a of this.list) {
@@ -570,43 +668,173 @@ export class SimEngine extends Emitter<EngineEventMap> {
     void s;
   }
 
+  // ───────────────── persistent island ids ─────────────────
+
+  /**
+   * computeIslands ranks components by their smallest node id; here every component inherits the id of the previous
+   * step's island it overlaps most (greedy, ties by lower id), so a split keeps the id on the larger part and a
+   * merged/dissolved island's id is retired (never reused). New islands get fresh ids. Deterministic.
+   */
+  private assignIslandIds(): void {
+    const cand: Array<[number, number, number]> = []; // [count, prevId, islandIdx]
+    this.islands.forEach((isl, i) => {
+      const cnt = new Map<number, number>();
+      for (const list of [isl.generatorIds, isl.substationIds, isl.consumerIds])
+        for (const b of list) {
+          const pid = this.prevIslandOf.get(b);
+          if (pid !== undefined) cnt.set(pid, (cnt.get(pid) ?? 0) + 1);
+        }
+      for (const [pid, c] of cnt) cand.push([c, pid, i]);
+    });
+    cand.sort((x, y) => y[0] - x[0] || x[1] - y[1] || x[2] - y[2]);
+    const ids: number[] = new Array(this.islands.length).fill(-1);
+    const used = new Set<number>();
+    for (const [, pid, i] of cand) {
+      if (ids[i] >= 0 || used.has(pid)) continue;
+      ids[i] = pid;
+      used.add(pid);
+    }
+    for (let i = 0; i < ids.length; i++) if (ids[i] < 0) ids[i] = this.nextIslandId++;
+    this.prevIslandOf.clear();
+    this.islands.forEach((isl, i) => {
+      isl.id = ids[i];
+      for (const list of [isl.generatorIds, isl.substationIds, isl.consumerIds]) for (const b of list) this.prevIslandOf.set(b, isl.id);
+    });
+  }
+
+  // ───────────────── step 5b: island supply (docs/MICROGRID.md §3) ─────────────────
+
+  private buildSupply(): void {
+    const s = this.snapshot;
+    for (const a of this.topo.prosumers) setSelfSupply(a);
+    for (const a of this.list) if (!a.plan) a.selfKW = 0;
+    this.topo.resetOffers();
+    this.plans = this.islands.map((isl) => this.topo.planIsland(isl, this.agents, (id) => s.generators[id].outputKW));
+    this.topo.curtail();
+    this.infos = this.islands.map((isl, i) => this.topo.buildInfo(isl, this.plans[i]));
+    s.islands = this.infos;
+
+    // events: microgrid formation, large thermal curtailment
+    const ids = new Set<number>();
+    let formed = 0;
+    let offered = 0;
+    let curtailed = 0;
+    for (let i = 0; i < this.infos.length; i++) {
+      const info = this.infos[i];
+      ids.add(info.id);
+      offered += info.prosumerOfferedKW;
+      curtailed += info.curtailedKW;
+      if (info.microgrid && !this.prevIslandIds.has(info.id) && info.consumerIds.length >= 2 && info.prosumerOfferedKW >= 5) {
+        if (++formed <= 3) {
+          const sub = this.topo.substationOf.get(info.consumerIds[0]);
+          const name = sub ? this.snapshot.buildings[sub].name : 'unknown';
+          const solar = this.plans[i].pros.reduce((x, a) => x + a.plan!.solar, 0);
+          const src = solar >= 0.5 * info.prosumerOfferedKW ? 'rooftop solar' : 'rooftop solar and batteries';
+          this.log('warn', `Feeder ${name} islanded — running as a prosumer microgrid on ${Math.round(info.prosumerOfferedKW)} kW of ${src}`);
+        }
+      }
+    }
+    if (formed > 3) this.log('warn', `${formed - 3} more feeders islanded as prosumer microgrids`);
+    this.prevIslandIds = ids;
+    if (curtailed > 100 && curtailed > 0.2 * offered && s.tMin - this.lastCurtailLog >= 45) {
+      this.lastCurtailLog = s.tMin;
+      this.log('info', `Prosumer curtailment: ${Math.round(curtailed)} kW of rooftop export curtailed at the inverters (feeder thermal limits)`);
+    }
+  }
+
+  private logSunset(hour: number): void {
+    const d = daylight(hour);
+    if (this.lastDaylight >= 0.15 && d < 0.15 && hour > 12 && this.topo.prosumers.length > 0) this.log('info', 'Sunset — prosumer solar fading');
+    this.lastDaylight = d;
+  }
+
   // ───────────────── step 6 ─────────────────
 
   private allocate(): void {
     const s = this.snapshot;
     for (const a of this.list) a.s.allocatedKW = 0;
-    for (const isl of this.islands) {
-      let supply = 0;
-      for (const gid of isl.generatorIds) supply += s.generators[gid].outputKW;
+    this.policy.beginStep?.(s);
+    for (let ii = 0; ii < this.islands.length; ii++) {
+      const isl = this.islands[ii];
+      const info = this.infos[ii];
+      const plan = this.plans[ii];
+      const supply = info.supplyKW; // P_total
       const requests: AllocationRequest[] = [];
+      const reqAgents: AgentRuntime[] = [];
       for (const cid of isl.consumerIds) {
         const a = this.agents[cid];
         if (!a || a.down || a.s.demandKW <= 1e-9) continue;
-        requests.push({
+        // NET grid request: own demand minus what the building covers from its own DER
+        const net = Math.max(0, a.s.demandKW - a.selfKW);
+        if (net <= 1e-9) continue;
+        const req: AllocationRequest = {
           buildingId: cid,
           kind: a.s.kind,
-          demandKW: a.s.demandKW,
-          minSafeKW: a.s.minSafeKW,
+          demandKW: net,
+          minSafeKW: Math.min(net, Math.max(0, a.s.minSafeKW - a.selfKW)),
           criticality: a.s.criticality,
           urgency: a.s.urgency,
           expectedDamagePerHour: a.s.expectedDamagePerHour,
           tokens: a.s.tokens,
           telemetry: a.s.telemetry,
-        });
+        };
+        if (a.plan) req.selfSupplyKW = a.selfKW;
+        if (a.s.storage) req.chargeKW = Math.min(net, a.s.storage.chargeKW);
+        if (a.s.dependentDamagePerHour !== undefined) req.dependentDamagePerHour = a.s.dependentDamagePerHour;
+        requests.push(req);
+        reqAgents.push(a);
       }
-      if (requests.length === 0) continue;
-      const raw = this.policy.allocate(supply, requests, s);
-      const res = this.validator.validate(supply, requests, raw);
-      for (const r of requests) {
-        const g = res.allocation[r.buildingId];
-        this.agents[r.buildingId].s.allocatedKW = Number.isFinite(g) && g > 0 ? g : 0;
-      }
-      for (const v of res.violations) {
-        const last = this.lastViolationLog.get(v.replace(/\d+/g, '#'));
-        if (last === undefined || s.tMin - last >= 30) {
-          this.log('warn', `Validator (${this.validator.name}): ${v}`);
-          this.lastViolationLog.set(v.replace(/\d+/g, '#'), s.tMin);
+      let total = 0;
+      if (requests.length > 0) {
+        const ctx: IslandContext = {
+          tMin: s.tMin,
+          islandId: isl.id,
+          generatorIds: isl.generatorIds,
+          substationIds: isl.substationIds,
+          consumerIds: isl.consumerIds,
+          info,
+        };
+        // Layer 2 proposes → Layer 3 validates → the validated allocation is committed atomically (FR-3.6).
+        const raw = this.policy.allocate(supply, requests, s, ctx);
+        const res = this.validator.validate(supply, requests, raw, { ...ctx, snapshot: s });
+        const committed: Record<string, number> = {};
+        for (const r of requests) {
+          const g = res.allocation[r.buildingId];
+          committed[r.buildingId] = Number.isFinite(g) && g > 0 ? Math.min(g, r.demandKW) : 0;
+          total += committed[r.buildingId];
         }
+        // physical invariant: Σ allocation ≤ P_total (last line of defence; a correct validator never triggers it)
+        if (total > supply + 1e-6) {
+          const k = total > 0 ? Math.max(0, supply) / total : 0;
+          for (const id of Object.keys(committed)) committed[id] *= k;
+          total *= k;
+          this.log('warn', `Engine: allocation exceeded island ${isl.id} supply — scaled down`);
+        }
+        for (let k = 0; k < requests.length; k++) reqAgents[k].s.allocatedKW = committed[requests[k].buildingId];
+        this.policy.commit?.(ctx, committed, res.audit ?? [], s);
+        for (const v of res.violations) {
+          const last = this.lastViolationLog.get(v.replace(/\d+/g, '#'));
+          if (last === undefined || s.tMin - last >= 30) {
+            this.log('warn', `Validator (${this.validator.name}): ${v}`);
+            this.lastViolationLog.set(v.replace(/\d+/g, '#'), s.tMin);
+          }
+        }
+      }
+      // Export dispatch: prosumer exports are used FIRST (free solar / stored energy), generators cover only the
+      // remainder → fuel is conserved. If the island allocates less than P_prosumer, every export is scaled down equally.
+      const genServed = this.topo.dispatch(info, total, plan.pros);
+      for (const gid of isl.generatorIds) this.genLoad.set(gid, plan.utilityDerKW > 1e-9 ? Math.min(1, genServed / plan.utilityDerKW) : 0);
+    }
+    for (const a of this.topo.prosumers) finalizeProsumer(a);
+    // UI state of the upper layers (one-way data flow: they only reach the view through the snapshot)
+    s.negotiation = this.policy.endStep?.(s);
+    s.safety = this.validator.endStep?.(s);
+    const neg = s.negotiation;
+    if (neg) {
+      for (const a of this.list) {
+        if (a.s.kind === 'house') continue;
+        const d = neg.agents[a.b.id];
+        if (d) a.s.tokens = d.tokens;
       }
     }
   }
@@ -649,7 +877,7 @@ export class SimEngine extends Emitter<EngineEventMap> {
     // substations / generators
     const inIsland = new Set<string>();
     for (const isl of this.islands) for (const id of isl.substationIds) inIsland.add(id);
-    for (const b of Object.values(s.buildings)) {
+    for (const b of this.infraB) {
       if (b.kind === 'substation') {
         const destroyed = this.destroyedB.has(b.id);
         b.status = destroyed ? 'destroyed' : this.down.has(b.id) || !inIsland.has(b.id) ? 'offline' : 'online';
@@ -664,7 +892,11 @@ export class SimEngine extends Emitter<EngineEventMap> {
 
   private waterDemand(id: string): number {
     const a = this.agents[id];
-    if (!a || a.down) return 0;
+    return a ? this.waterDemandOf(a) : 0;
+  }
+
+  private waterDemandOf(a: AgentRuntime): number {
+    if (a.down) return 0;
     switch (a.s.kind) {
       case 'house': return a.m.evacUntil > this.snapshot.tMin ? 0 : 0.06 * a.m.occupants;
       case 'hospital': return 18;
@@ -676,6 +908,22 @@ export class SimEngine extends Emitter<EngineEventMap> {
 
   private updateWater(): void {
     const s = this.snapshot;
+    const L = this.list;
+    if (this.wCons.length !== L.length) {
+      const idx = waterIndex(s.water);
+      this.wCons = new Int32Array(L.length);
+      this.wSrc = new Int32Array(L.length);
+      L.forEach((a, i) => {
+        this.wCons[i] = idx.get(waterConsumerId(a.b.id)) ?? -1;
+        this.wSrc[i] = a.s.kind === 'water' ? (idx.get(waterSourceId(a.b.id)) ?? -1) : -1;
+      });
+      this.wDem = new Float64Array(idx.size);
+    }
+    const dem = this.wDem;
+    for (let i = 0; i < L.length; i++) {
+      const ix = this.wCons[i];
+      if (ix >= 0) dem[ix] = this.waterDemandOf(L[i]);
+    }
     const res = updateWaterNetwork(
       s.water,
       s.cells,
@@ -684,11 +932,14 @@ export class SimEngine extends Emitter<EngineEventMap> {
         return a && !a.down ? a.servedFrac : 0;
       },
       (id) => this.waterDemand(id),
+      dem,
     );
     const pop = new Map<string, number>();
-    for (const a of this.list) {
-      const p = res.pressure.get(waterConsumerId(a.b.id));
-      if (p === undefined) continue; // telecom: no water service
+    for (let i = 0; i < L.length; i++) {
+      const a = L[i];
+      const ix = this.wCons[i];
+      if (ix < 0) continue; // telecom: no water service
+      const p = res.pressureArr[ix];
       const pct = Math.round(Math.min(1, p / 1.5) * 100);
       a.s.telemetry.waterPressureBar = Math.round(p * 100) / 100;
       a.s.telemetry.waterSupplyPct = pct;
@@ -698,12 +949,14 @@ export class SimEngine extends Emitter<EngineEventMap> {
         if (src && people > 0) pop.set(src, (pop.get(src) ?? 0) + people);
       }
     }
-    for (const a of this.list) {
+    for (let i = 0; i < L.length; i++) {
+      const a = L[i];
       if (a.s.kind !== 'water') continue;
       const sid = waterSourceId(a.b.id);
+      const ix = this.wSrc[i];
       const t = a.s.telemetry;
-      t.flowM3h = Math.round((res.flow.get(sid) ?? 0) * 10) / 10;
-      t.pressureBar = Math.round((res.pressure.get(sid) ?? 0) * 100) / 100;
+      t.flowM3h = Math.round((ix >= 0 ? res.flowArr[ix] : 0) * 10) / 10;
+      t.pressureBar = Math.round((ix >= 0 ? res.pressureArr[ix] : 0) * 100) / 100;
       t.populationServed = Math.round(pop.get(sid) ?? 0);
     }
   }
@@ -713,15 +966,8 @@ export class SimEngine extends Emitter<EngineEventMap> {
   private computeFlows(): void {
     const s = this.snapshot;
     const net = s.network;
-    for (const e of Object.values(net.edges)) e.flowKW = 0;
-    const subLoad = new Map<string, number>();
-    for (const f of net.feeders) {
-      const a = this.agents[f.consumerId];
-      const kw = a ? a.s.allocatedKW : 0;
-      if (kw <= 0) continue;
-      for (const eid of f.edgeIds) net.edges[eid].flowKW += kw;
-      subLoad.set(f.substationId, (subLoad.get(f.substationId) ?? 0) + kw);
-    }
+    // distribution: NET bidirectional flow per edge (allocation - export of everything downstream, live stretch only)
+    const subNet = this.topo.netFlows(this.agents);
     // transmission: spread each island's substation loads back to its generators (ECMP over shortest paths)
     for (const isl of this.islands) {
       const depth = new Map<string, number>();
@@ -742,8 +988,20 @@ export class SimEngine extends Emitter<EngineEventMap> {
           order.push(o);
         }
       }
+      // substations that export (net < 0) offset the import of the others before generator power is spread
+      let pos = 0;
+      let neg = 0;
+      for (const sid of isl.substationIds) {
+        const v = subNet.get(sid) ?? 0;
+        if (v > 0) pos += v;
+        else neg -= v;
+      }
+      const f = pos > 0 ? Math.max(0, pos - neg) / pos : 0;
       const load = new Map<string, number>();
-      for (const sid of isl.substationIds) load.set(net.nodes[s.buildings[sid].nodeId].id, subLoad.get(sid) ?? 0);
+      for (const sid of isl.substationIds) {
+        const v = subNet.get(sid) ?? 0;
+        load.set(net.nodes[s.buildings[sid].nodeId].id, v > 0 ? v * f : 0);
+      }
       for (let i = order.length - 1; i >= 0; i--) {
         const n = order[i];
         const d = depth.get(n)!;
@@ -773,9 +1031,9 @@ export class SimEngine extends Emitter<EngineEventMap> {
 
   private overloadCascade(): void {
     const net = this.snapshot.network;
-    for (const e of Object.values(net.edges)) {
+    for (const e of this.edgeList) {
       if (e.status !== 'ok') {
-        this.overload.delete(e.id);
+        if (this.overload.size > 0) this.overload.delete(e.id);
         continue;
       }
       if (e.flowKW > e.capacityKW) {
@@ -789,7 +1047,7 @@ export class SimEngine extends Emitter<EngineEventMap> {
             `Overload: ${e.tier} span ${e.id} tripped (${Math.round(e.flowKW)} kW > ${e.capacityKW} kW)`,
           );
         } else this.overload.set(e.id, n);
-      } else this.overload.delete(e.id);
+      } else if (this.overload.size > 0) this.overload.delete(e.id);
     }
   }
 
@@ -797,24 +1055,32 @@ export class SimEngine extends Emitter<EngineEventMap> {
 
   private computeMetrics(advance: boolean): Metrics {
     const s = this.snapshot;
+    // supply = Σ island P_total (line-limited, incl. prosumer exports); demand/allocation are on the NET grid basis
+    // (own demand minus local self-supply), i.e. exactly what the islands' clearing sees.
     let supply = 0;
-    for (const isl of this.islands) for (const gid of isl.generatorIds) supply += s.generators[gid].outputKW;
+    for (const info of this.infos) supply += info.supplyKW;
     let demand = 0;
     let alloc = 0;
     let critUnserved = 0;
     let damage = 0;
     let offline = 0;
+    let prosumerKW = 0;
+    let curtailedKW = 0;
     for (const a of this.list) {
       if (a.down) continue;
-      demand += a.s.demandKW;
+      demand += Math.max(0, a.s.demandKW - a.selfKW);
       alloc += a.s.allocatedKW;
-      critUnserved += Math.max(0, a.s.minSafeKW - a.s.allocatedKW);
+      critUnserved += Math.max(0, a.s.minSafeKW - a.selfKW - a.s.allocatedKW);
       damage += (a.s.expectedDamagePerHour * (1 - a.servedFrac)) / 60;
+      if (a.s.der) {
+        prosumerKW += a.s.der.exportedKW;
+        curtailedKW += a.s.der.curtailedKW;
+      }
     }
     if (advance) this.cumulativeDamage += damage;
     let destroyedCells = 0;
     for (const c of s.cells) if (c.status === 'destroyed') destroyedCells++;
-    for (const b of Object.values(s.buildings)) if (b.status === 'offline' || b.status === 'destroyed') offline++;
+    for (const b of this.bList) if (b.status === 'offline' || b.status === 'destroyed') offline++;
     return {
       supplyKW: supply,
       demandKW: demand,
@@ -824,6 +1090,10 @@ export class SimEngine extends Emitter<EngineEventMap> {
       cumulativeDamage: this.cumulativeDamage,
       buildingsOffline: offline,
       cellsDestroyed: destroyedCells,
+      prosumerKW,
+      curtailedKW,
+      islandCount: this.infos.length,
+      microgridCount: this.infos.reduce((n, i) => n + (i.microgrid ? 1 : 0), 0),
     };
   }
 
@@ -835,6 +1105,7 @@ export class SimEngine extends Emitter<EngineEventMap> {
       demandKW: m.demandKW,
       allocatedKW: m.allocatedKW,
       criticalUnservedKW: m.criticalUnservedKW,
+      prosumerKW: m.prosumerKW ?? 0,
     };
   }
 }

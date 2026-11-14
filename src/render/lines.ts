@@ -43,6 +43,8 @@ interface EdgeRec {
   speed: number;
   active: boolean;
   poolOffset: number;
+  /** prosumer export: pulses run downstream → upstream and are drawn green */
+  reverse: boolean;
 }
 
 const WIRE_OK = new THREE.Color(COLORS.ink);
@@ -87,6 +89,8 @@ export class PowerLines {
   private tierMat = new Map<LineTier, LineMaterial>();
   private tierObj = new Map<LineTier, LineSegments2>();
   private pulseMesh = new Map<LineTier, THREE.InstancedMesh>();
+  /** green pulses for reverse-flow (prosumer export) edges */
+  private pulseMeshRev = new Map<LineTier, THREE.InstancedMesh>();
   private pulseGeo = new THREE.IcosahedronGeometry(1, 1);
   private pulseMats: THREE.MeshBasicMaterial[] = [];
   private disposables: Array<{ dispose(): void }> = [];
@@ -264,6 +268,7 @@ export class PowerLines {
         speed: 0,
         active: false,
         poolOffset: 0,
+        reverse: false,
       };
       const mid = conds[Math.floor(conds.length / 2)];
       sample(mid.a, mid.b, n, sagFrac * Math.hypot(mid.b.x - mid.a.x, mid.b.z - mid.a.z), rec.centre, 0);
@@ -319,6 +324,14 @@ export class PowerLines {
       this.pulseMesh.set(tier, im);
       this.pulseMats.push(mat);
       this.group.add(im);
+
+      const matRev = new THREE.MeshBasicMaterial({ color: COLORS.green, toneMapped: false });
+      const imRev = new THREE.InstancedMesh(this.pulseGeo, matRev, pulseCap[tier]);
+      imRev.frustumCulled = false;
+      imRev.count = 0;
+      this.pulseMeshRev.set(tier, imRev);
+      this.pulseMats.push(matRev);
+      this.group.add(imRev);
     }
     this.group.add(this.supportsGroup, this.sparks.points);
     void PYLON_HEIGHT;
@@ -347,6 +360,7 @@ export class PowerLines {
   setFlowVisible(on: boolean): void {
     this.flowOn = on;
     this.pulseMesh.forEach((m) => (m.visible = on));
+    this.pulseMeshRev.forEach((m) => (m.visible = on));
   }
 
   /** Per-tick: wire state (broken / overloaded), fallen supports, flow speeds. */
@@ -382,6 +396,7 @@ export class PowerLines {
         this.breaks.push({ x: rec.centre[m], y: 2, z: rec.centre[m + 2] });
       }
       const ratio = e.capacityKW > 0 ? Math.min(1.2, e.flowKW / e.capacityKW) : 0;
+      rec.reverse = !!e.reverse;
       rec.active = !broken && e.flowKW > 0.05;
       rec.speed = rec.active ? (3.5 + 24 * Math.min(1, Math.sqrt(ratio) * 1.6)) * (rec.code === 2 ? 1.6 : 1) : 0;
     }
@@ -450,10 +465,13 @@ export class PowerLines {
     const radius: Record<LineTier, number> = { transmission: 0.26, distribution: 0.13 };
     const half: Record<LineTier, number> = { transmission: 1.6, distribution: 0.75 };
     const counters: Record<LineTier, number> = { transmission: 0, distribution: 0 };
+    const countersRev: Record<LineTier, number> = { transmission: 0, distribution: 0 };
     for (const rec of this.recs) {
       if (!rec.active) continue;
-      const im = this.pulseMesh.get(rec.tier);
+      const rev = rec.reverse;
+      const im = (rev ? this.pulseMeshRev : this.pulseMesh).get(rec.tier);
       if (!im) continue;
+      const cnt = rev ? countersRev : counters;
       const sp = spacing[rec.tier];
       rec.phase = (rec.phase + rec.speed * dt) % sp;
       const arr = im.instanceMatrix.array as Float32Array;
@@ -461,17 +479,20 @@ export class PowerLines {
       const len = half[rec.tier];
       const c = rec.centre;
       const n = rec.n;
+      // reverse: the same spacing, mirrored along the span, with the streak pointing back the way it travels
+      const sgn = rev ? -1 : 1;
       for (let d = rec.phase; d < rec.length; d += sp) {
-        let i = counters[rec.tier];
+        let i = cnt[rec.tier];
         if (i >= im.instanceMatrix.count) break;
-        counters[rec.tier] = i + 1;
-        const t = (d / rec.length) * (n - 1);
+        cnt[rec.tier] = i + 1;
+        const dd = rev ? rec.length - d : d;
+        const t = (dd / rec.length) * (n - 1);
         const i0 = Math.min(n - 2, Math.floor(t));
         const f = t - i0;
         const o = i * 16;
-        let zx = c[i0 * 3 + 3] - c[i0 * 3];
-        let zy = c[i0 * 3 + 4] - c[i0 * 3 + 1];
-        let zz = c[i0 * 3 + 5] - c[i0 * 3 + 2];
+        let zx = (c[i0 * 3 + 3] - c[i0 * 3]) * sgn;
+        let zy = (c[i0 * 3 + 4] - c[i0 * 3 + 1]) * sgn;
+        let zz = (c[i0 * 3 + 5] - c[i0 * 3 + 2]) * sgn;
         const zl = Math.hypot(zx, zy, zz) || 1;
         zx /= zl;
         zy /= zl;
@@ -508,9 +529,15 @@ export class PowerLines {
     }
     for (const tier of ['transmission', 'distribution'] as LineTier[]) {
       const im = this.pulseMesh.get(tier);
-      if (!im) continue;
-      im.count = counters[tier];
-      im.instanceMatrix.needsUpdate = true;
+      if (im) {
+        im.count = counters[tier];
+        im.instanceMatrix.needsUpdate = true;
+      }
+      const imRev = this.pulseMeshRev.get(tier);
+      if (imRev) {
+        imRev.count = countersRev[tier];
+        imRev.instanceMatrix.needsUpdate = true;
+      }
     }
   }
 

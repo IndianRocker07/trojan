@@ -1,4 +1,5 @@
 /** Mock engine + world for developing the UI without the real sim/render. Dev only. */
+import { START_HOUR } from '../core/constants';
 import { Emitter } from '../core/events';
 import type {
   Building,
@@ -8,11 +9,13 @@ import type {
   DisasterKind,
   DisasterParams,
   EngineEvents,
+  IslandInfo,
   LogEntry,
   PowerEdge,
   SimSnapshot,
   UtilityAgentState,
 } from '../core/types';
+import { MockNeg } from './devMockNeg';
 import type { EngineLike, LayerName, WorldEvents, WorldLike } from './contracts';
 
 const rnd = (() => {
@@ -53,6 +56,9 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
   private acc = 0;
   private events: { at: number; kind: DisasterKind; params: DisasterParams }[] = [];
   private evCount = 0;
+  private neg = new MockNeg();
+  policy = 'negotiation';
+  validator = 'safety';
 
   constructor() {
     super();
@@ -75,6 +81,10 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
         else if (kind === 'generator') gens[id] = { buildingId: id, capacityKW: i === 0 ? 14000 : 9000, outputKW: i === 0 ? 11000 : 6000, fuelHours: i === 0 ? 40 : Infinity, status: 'running' };
         else {
           consumers.push(id);
+          if ((kind === 'house' && i % 3 === 0) || kind === 'school') {
+            const campus = kind === 'school';
+            buildings[id].prosumer = { kind: campus ? 'campus' : 'rooftop', solarKWp: campus ? 90 : 4 + (i % 4), batteryKWh: campus ? 200 : 10, batteryMaxKW: campus ? 60 : 3, survivalKW: campus ? 24 : 0.5 };
+          }
           const demand = sp.w * (0.85 + rnd() * 0.3);
           const backup = kind === 'hospital' ? { type: 'diesel' as const, capacityKWh: 6000, remainingKWh: 4200, maxKW: 600 } : kind === 'telecom' ? { type: 'battery' as const, capacityKWh: 60, remainingKWh: 60, maxKW: 15 } : kind === 'emergency' ? { type: 'diesel' as const, capacityKWh: 960, remainingKWh: 900, maxKW: 120 } : { type: 'none' as const, capacityKWh: 0, remainingKWh: 0, maxKW: 0 };
           agents[id] = {
@@ -94,6 +104,10 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
         }
       }
     }
+    agents['water-0'].dependents = ['hospital-0', 'school-0', 'hospital-1'];
+    agents['water-0'].storage = { kind: 'reservoir', socPct: 82, chargeKW: 40 };
+    agents['telecom-0'].storage = { kind: 'battery', socPct: 100, chargeKW: 4 };
+    agents['hospital-0'].storage = { kind: 'diesel', socPct: 70, chargeKW: 0 };
     const edges: Record<string, PowerEdge> = {};
     const feeders: SimSnapshot['network']['feeders'] = [];
     let e = 0;
@@ -125,7 +139,7 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
   }
 
   timeOfDay() {
-    return (16 + this.snapshot.tMin / 60) % 24;
+    return (START_HOUR + this.snapshot.tMin / 60) % 24;
   }
   play() {
     this.snapshot.running = true;
@@ -139,6 +153,7 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
   reset() {
     const run = this.snapshot.running;
     const sp = this.snapshot.speed;
+    this.neg.reset();
     this.snapshot = this.make();
     this.snapshot.running = run;
     this.snapshot.speed = sp;
@@ -197,13 +212,81 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
     this.emit('log', e);
   }
 
+  /** Prosumer DER, utility buffers, dependents and islands (docs/MICROGRID.md). */
+  private microgrid(s: SimSnapshot, hour: number) {
+    const sun = hour >= 6 && hour <= 18 ? Math.sin(((hour - 6) / 12) * Math.PI) : 0;
+    const t = s.tMin;
+    let houseOff = 0;
+    let houseCurt = 0;
+    let schoolOff = 0;
+    let schoolCurt = 0;
+    const houseIds: string[] = [];
+    const schoolIds: string[] = [];
+    for (const a of Object.values(s.agents)) {
+      const sp = s.buildings[a.buildingId].prosumer;
+      if (!sp) continue;
+      const solar = sp.solarKWp * sun * (0.9 + 0.1 * Math.sin(t / 9 + sp.solarKWp));
+      const bat = Math.max(0.05, Math.min(1, 0.65 + 0.3 * Math.sin((hour - 9) / 24 * Math.PI * 2)));
+      const gen = solar + (bat > 0.2 ? sp.batteryMaxKW * 0.2 : 0);
+      const self = Math.min(gen, sp.survivalKW);
+      const offered = Math.max(0, gen - sp.survivalKW);
+      const curt = offered * (sp.kind === 'campus' ? 0.2 : 0.1) * (sun > 0.8 ? 1 : 0.3);
+      a.der = { solarKW: solar, batteryKWh: sp.batteryKWh * bat, batteryPct: bat, generationKW: gen, selfSupplyKW: self, offeredKW: offered, exportedKW: offered - curt, curtailedKW: curt };
+      a.telemetry.solarKW = solar;
+      a.telemetry.exportKW = offered - curt;
+      a.telemetry.curtailedKW = curt;
+      if (sp.kind === 'campus') {
+        schoolOff += offered;
+        schoolCurt += curt;
+        schoolIds.push(a.buildingId);
+      } else {
+        houseOff += offered;
+        houseCurt += curt;
+        houseIds.push(a.buildingId);
+      }
+    }
+    const sunny = sun > 0.05;
+    for (const a of Object.values(s.agents)) {
+      if (!a.storage) continue;
+      const st = a.storage;
+      if (st.kind === 'reservoir') {
+        st.chargeKW = sunny ? 40 : 25;
+        st.socPct = Math.max(5, Math.min(100, st.socPct + (a.allocatedKW >= a.demandKW - 0.5 ? 0.03 : -0.06)));
+        a.telemetry.chargeKW = st.chargeKW;
+        a.telemetry.bufferPct = st.socPct;
+      } else if (st.kind === 'battery') {
+        st.chargeKW = st.socPct < 99.5 ? 4 : 0;
+        a.telemetry.chargeKW = st.chargeKW;
+        a.telemetry.bufferPct = st.socPct;
+      }
+    }
+    const w = s.agents['water-0'];
+    if (w?.dependents) {
+      w.dependentDamagePerHour = w.dependents.reduce((n, id) => n + (s.agents[id]?.expectedDamagePerHour ?? 0) * (id.startsWith('hospital') ? 0.5 : 0.3), 0);
+      w.telemetry.dependentDamagePerHour = w.dependentDamagePerHour;
+    }
+    const g0 = s.generators['generator-0'];
+    const g1 = s.generators['generator-1'];
+    const mk = (id: number, gens: string[], util: number, offered: number, curt: number, limitF: number, cons: string[], pros: string[], microgrid: boolean): IslandInfo => {
+      const prosumerKW = offered - curt;
+      const lineLimitKW = Math.max(1, (util + prosumerKW) * limitF);
+      return { id, generatorIds: gens, substationIds: [`substation-${id}`], consumerIds: cons, prosumerIds: pros, microgrid, utilityDerKW: util, prosumerOfferedKW: offered, prosumerKW, curtailedKW: curt, lineLimitKW, supplyKW: Math.min(util + prosumerKW, lineLimitKW), demandKW: cons.reduce((n, c) => n + (s.agents[c]?.demandKW ?? 0), 0) };
+    };
+    const ids = Object.keys(s.agents);
+    s.islands = [
+      mk(0, ['generator-0'], g0?.outputKW ?? 0, schoolOff, schoolCurt, 0.97, ids.filter((_, i) => i % 3 !== 2), schoolIds, false),
+      mk(1, [], 0, houseOff, houseCurt, 1, ids.filter((_, i) => i % 3 === 2).slice(0, 12), houseIds, true),
+      mk(2, ['generator-1'], g1?.outputKW ?? 0, 0, 0, 1.05, ids.slice(-4), [], false),
+    ];
+  }
+
   private tick1() {
     const s = this.snapshot;
     s.tMin++;
     for (const ev of this.events.filter((x) => x.at === s.tMin)) this.trigger(ev.kind, ev.params);
     for (const d of s.disasters) if (d.active && d.durationMin > 0 && s.tMin - d.startMin > d.durationMin) d.active = false;
     const t = s.tMin;
-    const hour = (16 + t / 60) % 24;
+    const hour = (START_HOUR + t / 60) % 24;
     let supply = 0;
     for (const g of Object.values(s.generators)) {
       if (g.status === 'running') {
@@ -255,6 +338,7 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
         else T[k] = Math.max(0, T[k] + (rnd() - 0.45) * (Math.abs(T[k]) * 0.02 + 0.2) * (1 + active));
       }
     }
+    this.microgrid(s, hour);
     for (const b of Object.values(s.buildings)) if (b.kind === 'substation') b.status = 'online';
     for (const g of Object.values(s.generators)) s.buildings[g.buildingId].status = g.status === 'running' ? 'online' : 'offline';
     if (active) {
@@ -262,10 +346,18 @@ export class MockEngine extends Emitter<{ [K in keyof EngineEvents]: EngineEvent
       for (let i = 0; i < Math.min(eids.length, 6); i++) s.network.edges[eids[(t * 3 + i * 17) % eids.length]].status = t % 40 < 20 ? 'broken' : 'ok';
     }
     Object.assign(s.metrics, { supplyKW: supply, demandKW: demand, allocatedKW: alloc, servedPct: demand ? alloc / demand : 1, criticalUnservedKW: crit, buildingsOffline: off });
+    const exported = s.islands!.reduce((n, i) => n + i.prosumerKW, 0);
+    s.metrics.prosumerKW = exported;
+    s.metrics.curtailedKW = s.islands!.reduce((n, i) => n + i.curtailedKW, 0);
+    s.metrics.islandCount = s.islands!.length;
+    s.metrics.microgridCount = s.islands!.filter((i) => i.microgrid).length;
     if (t % 5 === 0) {
-      s.history.push({ tMin: t, supplyKW: supply, demandKW: demand, allocatedKW: alloc, criticalUnservedKW: crit });
-      if (s.history.length > 720) s.history.shift();
+      s.history.push({ tMin: t, supplyKW: supply, demandKW: demand, allocatedKW: alloc, criticalUnservedKW: crit, prosumerKW: exported });
+      if (s.history.length > 1440) s.history.shift();
     }
+    const ns = this.neg.update(s);
+    s.negotiation = this.policy === 'negotiation' ? ns.negotiation : undefined;
+    s.safety = this.validator === 'safety' ? ns.safety : undefined;
     if (t % 45 === 0) this.log('info', `Evening demand ${(demand / 1000).toFixed(1)} MW, supply ${(supply / 1000).toFixed(1)} MW`);
     if (crit > 50 && t % 20 === 0) this.log('warn', 'Critical load below minimum safe level', 'hospital-0');
   }

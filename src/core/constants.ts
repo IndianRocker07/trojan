@@ -11,10 +11,10 @@ export const HALF_D = WORLD_D / 2;
 export const BLOCK = 6;
 
 /** Scenario length and clock. */
-export const SCENARIO_MINUTES = 12 * 60;
+export const SCENARIO_MINUTES = 24 * 60; // 24 h from START_HOUR (docs/MICROGRID.md)
 export const SIM_STEP_MIN = 1; // engine integrates in 1-minute steps
 export const DEFAULT_SPEED = 10; // sim minutes per real second
-export const HISTORY_LEN = 720;
+export const HISTORY_LEN = 300; // >= 24 h of 5-min samples (289)
 export const LOG_LEN = 200;
 
 /** Footprints in cells (w along X, d along Z) per building kind. */
@@ -49,8 +49,8 @@ export const worldToCell = (x: number, z: number) => ({
   row: Math.min(GRID_ROWS - 1, Math.max(0, Math.floor((z + HALF_D) / CELL))),
 });
 
-/** Scenario clock starts at 16:00 local time. */
-export const START_HOUR = 16;
+/** Scenario clock starts at 10:00 local time (midday solar surplus -> sunset -> night on reserves -> dawn). */
+export const START_HOUR = 10;
 
 /** Water mains are buried this deep (m, negative = below ground). */
 export const WATER_PIPE_DEPTH = -2.5;

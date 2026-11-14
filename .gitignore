@@ -3,3 +3,5 @@ dist
 .design/*.tmp
 shots/
 *.log
+.env.local
+.env

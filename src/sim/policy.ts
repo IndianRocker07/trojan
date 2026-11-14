@@ -4,16 +4,48 @@
  *  - BaselineValidator → replaced by the Layer 3 safety layer (hard limits, physics, fairness audit).
  * They exist so the simulation is a complete closed loop on its own and to define the plug-in contract.
  */
-import type { AllocationPolicy, AllocationRequest, ConstraintValidator } from '../core/types';
+import type { AllocationPolicy, AllocationRequest, ConstraintValidator, SimSnapshot } from '../core/types';
+
+/** building id → rank in ascending id order (so the id tie-break is a number compare); cached per buildings object */
+const idRanks = new WeakMap<object, Map<string, number>>();
+function rankOf(buildings: object): Map<string, number> {
+  let m = idRanks.get(buildings);
+  if (!m) {
+    m = new Map();
+    Object.keys(buildings).sort().forEach((id, i) => m!.set(id, i));
+    idRanks.set(buildings, m);
+  }
+  return m;
+}
 
 /** "Critical-first proportional": min-safe grants by criticality, remainder proportional to unmet demand. */
 export class BaselinePolicy implements AllocationPolicy {
   name = 'baseline: critical-first proportional';
 
-  allocate(supplyKW: number, requests: AllocationRequest[]): Record<string, number> {
+  allocate(supplyKW: number, requests: AllocationRequest[], snapshot?: SimSnapshot): Record<string, number> {
     const out: Record<string, number> = {};
     let left = Math.max(0, supplyKW);
-    const sorted = [...requests].sort((a, b) => b.criticality - a.criticality || (a.buildingId < b.buildingId ? -1 : a.buildingId > b.buildingId ? 1 : 0));
+    let sorted: AllocationRequest[];
+    const ranks = snapshot ? rankOf(snapshot.buildings) : undefined;
+    const n = requests.length;
+    const rk = new Float64Array(n);
+    let ok = ranks !== undefined;
+    if (ranks) {
+      for (let i = 0; i < n; i++) {
+        const v = ranks.get(requests[i].buildingId);
+        if (v === undefined) { ok = false; break; }
+        rk[i] = v;
+      }
+    }
+    if (ok) {
+      // same total order as the string comparison below (criticality desc, id asc), with the id as a precomputed rank
+      const idx = new Array<number>(n);
+      for (let i = 0; i < n; i++) idx[i] = i;
+      idx.sort((i, j) => requests[j].criticality - requests[i].criticality || rk[i] - rk[j]);
+      sorted = idx.map((i) => requests[i]);
+    } else {
+      sorted = [...requests].sort((a, b) => b.criticality - a.criticality || (a.buildingId < b.buildingId ? -1 : a.buildingId > b.buildingId ? 1 : 0));
+    }
     for (const r of sorted) {
       const g = Math.max(0, Math.min(r.minSafeKW, r.demandKW, left));
       out[r.buildingId] = g;
