@@ -1,10 +1,9 @@
 # Trojan — Technical Specification
 
-Version 0.1 · 2026-11-14 · Scope of this build: **Layer 1 (Simulation)**. Layers 2 and 3 are specified here
-as interfaces and design notes so Layer 1 is built to receive them.
+Version 0.1 · 2026-11-14 · Scope: **Layers 1–3 built** (Simulation, Negotiation, Safety) plus the prosumer microgrid extension. Layer 2 and 3 build specs: `docs/NEGOTIATION.md`; microgrid: `docs/MICROGRID.md`.
 
 Related: `PROJECT.md` (what & why), `PRD.md` (requirements), `DESIGN.md` (UI look), `docs/MODEL_BRIEF.md`
-(3D component rules).
+(3D component rules), `docs/NEGOTIATION.md` (Layers 2–3 build spec), `docs/MICROGRID.md` (prosumers, islands) and `agent_prompt.md` (need-based bidding rules).
 
 ---
 
@@ -17,8 +16,9 @@ Related: `PROJECT.md` (what & why), `PRD.md` (requirements), `DESIGN.md` (UI loo
 │ 3D View   src/render/*    WorldView: city, lines, flow, disasters, picking  │
 │ Models    src/models/*    procedural Three.js components (one file / kind)  │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ Layer 3 — Safety          ConstraintValidator   (interface; baseline only)  │
-│ Layer 2 — Negotiation     AllocationPolicy      (interface; baseline only)  │
+│ Layer 3 — Safety          ConstraintValidator   src/safety/* (built)        │
+│ Layer 2 — Negotiation     AllocationPolicy      src/negotiation/* (built)   │
+│ Server    server/*  /api/jev proxy to TypeSafe Jev (Node only)              │
 │ Layer 1 — Simulation      src/sim/*  SimEngine: grid, city, power network,  │
 │                           disasters, utility agents, telemetry, clock       │
 ├────────────────────────────────────────────────────────────────────────────┤
@@ -29,8 +29,8 @@ Related: `PROJECT.md` (what & why), `PRD.md` (requirements), `DESIGN.md` (UI loo
 - **One direction of data**: `SimEngine` owns all state and emits `tick` with a `SimSnapshot`. The view and
   UI read snapshots; they never mutate simulation state. User actions call engine methods
   (`trigger`, `play`, `setSpeed`, …).
-- **Pure simulation**: `src/sim/**` must not import `three` or touch the DOM. It must run in Node
-  (future: headless batch runs, agent training, tests).
+- **Pure simulation**: `src/sim/**` must not import `three` or touch the DOM. It runs in Node
+  (headless runs, tests and the bench).
 - **Determinism**: all randomness flows from `Rng(seed)`. Same seed + same triggered events ⇒ identical run.
 - **Stack**: Vite 8, TypeScript (strict), Three.js r187, no UI framework (plain DOM + CSS custom properties).
 
@@ -43,6 +43,12 @@ Related: `PROJECT.md` (what & why), `PRD.md` (requirements), `DESIGN.md` (UI loo
 | `src/render/*` (except `palette.ts`) | render agent | Three.js |
 | `src/render/palette.ts`, `src/models/kit.ts`, `src/models/index.ts` | orchestrator | shared |
 | `src/models/<kind>.ts`, `pylon.ts`, `props.ts` | one model agent each | |
+| `src/negotiation/config.ts` | orchestrator | Layer 2 tunables; change only via orchestrator |
+| `src/negotiation/*` (other files) | Layer 2 | pure TS; Jev only in `jevClient.ts` |
+| `src/safety/*` | Layer 3 | pure TS; imports `src/core/**` only, never `src/negotiation/**` |
+| `src/sim/microgrid.ts` | sim agent | prosumers, islands, export curtailment (`docs/MICROGRID.md`) |
+| `server/*` | orchestrator | Node-only Vite `/api/jev` proxy; holds the Jev key |
+| `scripts/negotiation-tests.ts`, `scripts/safety-tests.ts`, `scripts/negotiation-bench.ts` | Layer 2 / Layer 3 | run by `npm test` / `npm run bench` |
 | `src/ui/*`, `src/styles/*` | UI agent | |
 | `src/main.ts`, `index.html` | orchestrator | wiring |
 | `src/dev/gallery.ts`, `models.html`, `scripts/shot.mjs` | orchestrator | dev tools |
@@ -55,9 +61,9 @@ Related: `PROJECT.md` (what & why), `PRD.md` (requirements), `DESIGN.md` (UI loo
 - Grid: `GRID_COLS × GRID_ROWS = 48 × 48` cells, `CELL = 12 m` ⇒ city is 576 m × 576 m, centred on origin.
 - Cell `(col,row)` min corner at `(col*CELL − HALF_W, row*CELL − HALF_D)`; `cellId = row*48 + col`.
 - Helpers in `src/core/constants.ts`: `cellId`, `cellCol`, `cellRow`, `cellCenter`, `worldToCell`.
-- Clock: 1 engine step = 1 simulated minute. Scenario length 12 h (`SCENARIO_MINUTES`). The scenario
-  starts at **16:00 local** (`START_HOUR = 16`) so it runs through dusk into the night (solar falls away,
-  lit windows make power state visible). Speed = sim minutes per real second (1, 5, 10, 30, 60).
+- Clock: 1 engine step = 1 simulated minute. Scenario length 24 h (`SCENARIO_MINUTES = 1440`). The scenario
+  starts at **10:00 local** (`START_HOUR = 10`) so it sees midday solar surplus, sunset, a night on reserves and
+  dawn recovery (solar falls away, lit windows make power state visible). Speed = sim minutes per real second (1, 5, 10, 30, 60).
 
 ---
 
@@ -88,6 +94,8 @@ Rotation: front (+Z before rotation) faces the nearest road side of the block.
 | `water` | 3 | 2×2 | one by the river (intake), others on high ground |
 | `telecom` | 8 | 1×1 | spread evenly (coverage) |
 | `house` | fill | 1×1 | ~65% of remaining land cells in non-park blocks; variant 0–3 |
+
+**Prosumers** (`docs/MICROGRID.md` §2): a seeded ~30% of houses get rooftop solar and a small battery (houses that already have a battery keep it); every school is a campus prosumer with larger solar and a battery. No new building kinds.
 
 Each `Building` gets `id = "<kind>-<n>"`, a readable `name` (e.g. "Riverside General Hospital",
 "Station 2 — Fire & Rescue", "Northside Pump Station", "Tower T-05", "Substation S3", "Westbank Thermal
@@ -124,8 +132,8 @@ Quadrants split by the river + one north/south line: `Westbank N/S`, `Riverside`
    generator/substation/consumer nodes, which are dead if any of their building cells is not `ok`.
 2. An edge is `broken` if either endpoint is dead, any of its `cells` is `destroyed` or `burning`, or it
    tripped from overload (§7.4).
-3. BFS from running generators over live nodes/ok edges ⇒ **islands**. Each island's supply = sum of its
-   generators' `outputKW`. Consumers not reached ⇒ `connected = false`.
+3. **Islands** = connected components of the live network that contain at least one supply source: a running generator, a prosumer with `offeredKW > 0`, or a charged battery. A component of consumers only stays dark. Components without a generator are `microgrid: true`. Ids are stable (sorted by smallest node id) and `snapshot.islands: IslandInfo[]` is published every step. Consumers not reached ⇒ `connected = false`.
+4. **Supply** `P_total = min(P_utility_DER + P_prosumer, P_line_limit)`: `P_utility_DER` = Σ running generator output; `P_prosumer` = Σ prosumer exports **after curtailment** (for each distribution edge, Σ exports injected downstream ≤ `capacityKW × 0.97`; the excess is curtailed at the inverters, deterministically); `P_line_limit` = what the surviving transmission and feeder-root edges can deliver, plus the curtailed prosumer exports. Policy and validator receive `P_total` as the island supply (`docs/MICROGRID.md` §1, §3).
 
 ### 4.4 Rendering contract
 Each node has a world `pos` (X/Z). The view places a pylon/pole model there and rotates it so its arms
@@ -214,6 +222,13 @@ When `allocatedKW < demandKW` an agent draws `min(backup.maxKW, deficit)` from b
 `remainingKWh > 0`. Building status: `online` (≥ 99% served), `brownout` (≥ minSafe but < demand),
 `backup` (grid share < minSafe but backup covers it), `offline`, `destroyed`.
 
+### 6.5 Storage, prosumers and dependencies (`docs/MICROGRID.md` §4–§5)
+
+- `storage` (utility buffers): water `reservoir` (SoC = `reservoirPct`), telecom `battery` (SoC = `batteryPct`), hospital and emergency `diesel`. `chargeKW` is the sheddable part of `demandKW` (refill or charger draw); if not granted the buffer simply does not charge, with no damage.
+- `der` (prosumers: rooftop houses and campus schools): `solarKW`, `batteryPct`, `selfSupplyKW`, `offeredKW`, `exportedKW`, `curtailedKW`. The building's grid request is `max(0, demand − selfSupplyKW)`.
+- `dependents` / `dependentDamagePerHour` = Σ w·D_j, where D_j is the dependent's `expectedDamagePerHour`: water feeds hospitals (w 0.5) and shelters (w 0.3) on its water tree; telecom covers emergency stations (w 0.4) and hospitals (w 0.1) within 350 m.
+- Telemetry keys added: `chargeKW` and `bufferPct` (buffer utilities), `dependentDamagePerHour` (utilities with dependents), and for prosumers `solarKW`, `batteryPct`, `exportKW`, `curtailedKW`.
+
 ---
 
 ## 7. Engine — `src/sim/engine.ts`
@@ -233,19 +248,19 @@ export class SimEngine extends Emitter<EngineEvents> {
 }
 ```
 
-### 7.1 Step order (per simulated minute)
+### 7.1 Step order (per simulated minute, as in `engine.ts` `pipeline`)
+0. Scheduled scenario events fire at their minute.
 1. Advance disasters (spread/move/recede) → update `cells[].status`.
 2. Apply damage: buildings on non-`ok` cells → `destroyed`; generators there → `destroyed`.
-3. Generators: output = capacity × availability × (solar: daylight curve × cloud factor (cyclone ⇒ ×0.2));
-   thermal ± 3% noise; fuel decreases; `tripped` by `grid_fault` or overload.
-4. Connectivity / islands (§4.3).
-5. Agents: update telemetry (§6.2), demand, minSafe, urgency, damage rate.
-6. Allocation per island: `requests = connected consumers` →
-   `policy.allocate(supply, requests, snapshot)` → `validator.validate(...)` → `allocatedKW`.
-7. Backup draw & building status (§6.4).
-8. Edge flows: each feeder adds its consumer's `allocatedKW` to every edge in `edgeIds`; transmission
-   edges carry each substation's total split across its live incoming transmission edges.
-9. Overload cascade (§7.4). 10. Metrics, history sample (every 5 min), log entries.
+3. Generators: output = capacity × availability × (solar: daylight curve × cloud factor (cyclone ⇒ ×0.2)); thermal ± 3% noise; fuel decreases; `tripped` by `grid_fault` or overload.
+3b. Prosumer DER: solar, battery state, `p_min` self-supply and the offer (`docs/MICROGRID.md` §2).
+4. Connectivity / islands (§4.3); components with a prosumer offer or a charged battery count as sourced.
+5. Agents: telemetry (§6.2), demand, minSafe, urgency, damage rate, dependents and buffer storage (§6.5).
+5b. Island supply: per-island prosumer plans, per-edge export curtailment, `P_total` (§4.3).
+6. Allocation per island: consumers' net grid requests → `policy.allocate(supply, requests, snapshot)` → `validator.validate(...)` → `allocatedKW`.
+7. Backup draw & building status (§6.4); underground water (§4.5).
+8. Edge flows: each feeder carries its consumer's allocation; per edge `flow = |Σ downstream allocation − Σ downstream export|` (net, bidirectional; direction kept for rendering). Transmission edges carry each substation's total across its live incoming links.
+9. Overload cascade (§7.4) on advancing steps. 10. Metrics; history sample every 5 sim minutes; log entries.
 
 ### 7.2 Baseline policy (Layer 1 placeholder) — `src/sim/policy.ts`
 `BaselinePolicy` ("critical-first proportional"): (a) sort requests by criticality desc; grant each
@@ -270,10 +285,12 @@ baseline policy this models real cascading failure; Layer 3 is expected to preve
 
 ### 7.5 Scenarios — `src/sim/scenarios.ts`
 `SCENARIOS: { id; name; description; seed; events: { atMin; kind; params }[] }[]`
-1. `quiet-night` — no disasters (baseline).
-2. `monsoon-cyclone` — cyclone enters from the south-east at 01:30 (t=90), flood starts t=180.
-3. `earthquake` — M6.8-like earthquake near the river at t=60, aftershocks, fire at t=75 near the epicentre.
-4. `compound` — grid fault on the thermal plant at t=30, earthquake t=120, flood t=240.
+All scenarios use seed 1337 and run 24 h from 10:00 (t = 0). Times below are clock times (t = minutes since 10:00).
+1. `quiet-night` — **Quiet day**: no disasters; midday solar surplus, evening peak, quiet night (baseline).
+2. `monsoon-cyclone` — **Monsoon cyclone**: cyclone from the south-east at 13:00 (t = 180, 240 min; rooftop and farm solar ×0.2) sweeps across the east bank; flood from 16:00 (t = 360, 360 min) into the evening and night.
+3. `earthquake` — **Earthquake & fires**: M6.8-like quake beside the river at 12:30 (t = 150, intensity 0.85, radius 9 cells); fire at 12:45 (t = 165) near the epicentre; the day ends on batteries.
+4. `compound` — **Compound crisis**: generator-0 trips at 14:00 (t = 240) for 3 h; quake on the west bank at 16:30 (t = 390, intensity 0.9); flood at 19:00 (t = 540, 360 min). The city ends up on reserves overnight.
+
 
 ### 7.6 Metrics
 See `Metrics` in `types.ts`. `cumulativeDamage += Σ expectedDamagePerHour × (1 − servedFraction) / 60`
@@ -376,7 +393,7 @@ Two independently toggled layers (`setLayer('power' | 'water', on)`):
 ## 9. UI — `src/ui/*` (see DESIGN.md for the look)
 
 Layout (desktop): full-bleed 3D canvas; floating panels on top of it.
-- **Top bar** (pill): wordmark "Trojan", scenario select, clock `16:00 → Day 1, 21:34`, play/pause,
+- **Top bar** (pill): wordmark "Trojan", scenario select, clock `10:00 → Day 1, 15:34`, play/pause,
   step, speed segmented control (1×/5×/10×/30×/60×), reset.
 - **Left rail — Disasters**: one card per kind with a short description; click "Place" ⇒ cell pick mode
   (cursor preview), then click on the map; intensity + radius sliders; active disasters listed with
@@ -394,43 +411,37 @@ Layout (desktop): full-bleed 3D canvas; floating panels on top of it.
 
 ---
 
-## 10. Layer 2 — Negotiation, bidding & prioritisation (future, design notes)
+## 10. Layer 2 — Negotiation, bidding & prioritisation (built)
 
-Not built in this phase. Layer 1 already produces everything it needs (`AllocationRequest`, telemetry,
-tokens, islands).
+Built. Full build spec: `docs/NEGOTIATION.md` (normative together with `agent_prompt.md`, which overrides earlier token-bidding wording). Code: `src/negotiation/*`; tunables: `src/negotiation/config.ts`. Implements `AllocationPolicy.allocate()`.
 
-- **Agents**: one autonomous agent per utility (hospital, water, emergency, telecom, shelter, and
-  aggregated household clusters per feeder). Each reads its own live telemetry.
-- **Bids** (no real money): `{ requestKW, minSafeKW, criticality, urgency, expectedDamagePerHour,
-  tokensOffered, flexibility (kW it can shed and for how long), duration }`.
-- **Dynamic priority score**: `P = w1·criticality + w2·urgency + w3·normalisedDamage + w4·tokensOffered
-  − w5·recentlyServedShare` (the last term enforces fairness over time). Weights adapt with the crisis
-  phase; not a fixed rule table.
-- **Virtual negotiation tokens**: agents spend tokens to raise priority now, earn tokens by conceding
-  (accepting less than requested, deferring load, shedding non-critical load), and can sign **forward
-  contracts** ("I give you 200 kW now, you return 150 kW in hour 3").
-- **Negotiation engine**: per island, rounds of bid → provisional clearing → counter-offers /
-  concessions → final allocation, bounded to N rounds within one sim minute (anytime algorithm). Options:
-  sealed-bid priority auction with concession rounds, or contract-net protocol with token transfers.
-- **Implements** `AllocationPolicy.allocate()`.
+- **Agents**: one `UtilityAgent` per hospital, water, emergency, telecom and school (21 negotiators); one `ClusterAgent` per household cluster (same feeder substation and 6×6 city block; medical-device homes are a protected sub-bid). Only affected utilities negotiate actively; others cooperate or stay idle.
+- **Perception**: System-1 perception via TypeSafe Jev (`@typesafe-ai/sdk`, Node only) returns urgency, damage, imminent-failure risk, concession willingness and strategy. It is cached, blended into the bid at a capped weight, and falls back to a deterministic heuristic; without a provider, headless runs are deterministic.
+- **Need-based auction** (`clearing.ts`): phase 1 grants every protected minimum-safe floor, with tokens excluded (triage by need when supply is short); phase 2 water-fills the remainder weighted by need and marginal damage. Raw requested kW is not a priority term.
+- **Two rounds per minute** (one if there is no deficit): propose, provisional clear, shortfall notice, concessions, final clear. Concessions are harm-aware: an agent sheds only load whose loss is covered (charging, own backup, own battery); `requestKW` never drops below `minSafeKW`.
+- **Pre-charge and coast** (`docs/MICROGRID.md` §6): buffers bid for charging on midday prosumer surplus and coast on reserves near sunset.
+- **Tokens and forward contracts**: 100-token endowment with caps, decay and replenishment; tokens are escrowed and charged only when an agent wins phase-2 power; verified concessions earn tokens; contracts (`nowKW`, later repayment, stakes) are honoured, defaulted or cancelled.
+- **Explanations**: every allocation carries a plain-language reason and per-minute dossier (Utility dossier and Negotiation tab in the UI).
 
-## 11. Layer 3 — Safety (future, design notes)
+---
 
-- **Implements** `ConstraintValidator.validate()`; runs after every allocation and can veto.
-- **Hard limits**: Σ allocation ≤ island supply; per-edge flow ≤ capacity (prevents §7.4 cascades);
-  generator ramp-rate limits; no allocation to disconnected or destroyed nodes.
-- **Physics**: power balance per island, line capacity along the feeder path, transformer limits at
-  substations, backup energy cannot go negative.
-- **Guarantees**: every critical service gets ≥ minSafe if physically possible (else a logged,
-  explicit triage decision); no inconsistent states (atomic commit of an allocation; state invariants
-  checked each step); fairness bound (no agent starved for more than K minutes while others exceed
-  their minSafe).
-- Produces an auditable `violations` log that the UI shows.
+## 11. Layer 3 — Safety (built)
+
+Built. Build spec: `docs/NEGOTIATION.md` §6 and `docs/MICROGRID.md` §7. Code: `src/safety/*`, which imports only `src/core/**` and never negotiation code. Implements `ConstraintValidator.validate()`; it runs after every allocation and can veto or correct it.
+
+- **Sanitize**: non-finite, negative or over-demand values are fixed; unknown, destroyed or disconnected agents get 0.
+- **Capacity on net flow**: feeder edges are checked against `capacityKW × 0.97` on net flow (allocation minus prosumer export); substation transformer limits are enforced. Corrections shed the portion above minSafe first, then the least harm per kW.
+- **Supply**: Σ allocation ≤ the island's `P_total` (§4.3).
+- **Min-safe guarantee**: critical agents (criticality ≥ 0.8) are topped up toward minSafe where physically possible; otherwise a `triage` audit entry records the reason.
+- **Fairness**: an agent below minSafe for more than K = 30 consecutive minutes is corrected while others on its island are above theirs.
+- **Invariants and fallback**: finite values, within demand, supply and capacity. A failed proposal falls back to the last committed allocation, then to a minSafe-first proportional allocation; `violationsCommitted` must stay 0.
+- **Audit**: every correction, triage and fallback is logged with rule, severity and reason; the UI shows the feed.
 
 ---
 
 ## 12. Testing & verification
 - `npm run typecheck` clean. Sim modules runnable in Node (`npx tsx`) for a smoke run of each scenario
   (no NaN, Σ allocation ≤ supply every step, deterministic per seed).
+- `npm run typecheck` (strict, both tsconfigs). `npm test` runs the sim smoke run (`scripts/sim-smoke.ts`), negotiation tests (`scripts/negotiation-tests.ts`) and safety tests (`scripts/safety-tests.ts`) under `tsx`. `npm run bench` runs the headless negotiation benchmark (`scripts/negotiation-bench.ts`).
 - Visual: `scripts/shot.mjs` screenshots of `models.html` and `index.html` (desktop 1440×900, phone
   390×844) reviewed after every major change.

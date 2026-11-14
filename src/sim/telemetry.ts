@@ -8,9 +8,18 @@
  * demand, minSafe, criticality, urgency and expected damage for the current step.
  */
 import { HALF_D, HALF_W, START_HOUR, CELL, GRID_COLS } from '../core/constants';
-import type { GridCell } from '../core/types';
+import type { GridCell, WaterNetwork } from '../core/types';
 import { KIND_PROFILES } from './profiles';
 import { type AgentRuntime, cellDistM } from './agents';
+import { waterSourceId } from './waterNetwork';
+
+/**
+ * Telemetry keys written into `UtilityAgentState.telemetry` (SPEC.md §6 lists the per-kind ones; microgrid additions):
+ *  - every utility with a buffer (hospital, emergency, water, telecom): `chargeKW` (sheddable buffer-charging part of
+ *    demandKW), `bufferPct` (= storage.socPct), and, when it has dependents, `dependentDamagePerHour`;
+ *  - prosumers (rooftop houses, campus schools; written by the engine after export dispatch): `solarKW`, `batteryPct`
+ *    (DER battery), `exportKW` (exported to the island), `curtailedKW`.
+ */
 
 const clamp = (x: number, a = 0, b = 1) => (x < a ? a : x > b ? b : x);
 const r1 = (x: number) => Math.round(x * 10) / 10;
@@ -26,6 +35,16 @@ function interp(table: Array<[number, number]>, h: number): number {
     }
   }
   return table[table.length - 1][1];
+}
+let hfH = NaN;
+let hfV = 0;
+/** HOUSE_CURVE at an hour, memoised (every house asks for the same hour within a step). */
+function houseFactor(hour: number): number {
+  if (hour !== hfH) {
+    hfV = interp(HOUSE_CURVE, hour);
+    hfH = hour;
+  }
+  return hfV;
 }
 const HOUSE_CURVE: Array<[number, number]> = [[0, 0.55], [3, 0.4], [6, 0.5], [8, 0.75], [12, 0.6], [15, 0.65], [17, 0.8], [19, 1.0], [22, 0.95], [24, 0.55]];
 const WATER_CURVE: Array<[number, number]> = [[0, 0.8], [6, 0.9], [8, 1], [12, 0.95], [17, 1], [21, 0.9], [24, 0.8]];
@@ -48,11 +67,11 @@ export function computeDemand(rt: AgentRuntime, hour: number): number {
     case 'water':
       return base * (0.8 + 0.25 * (1 - m.reservoir / 100)) * interp(WATER_CURVE, hour);
     case 'telecom':
-      return base * (0.65 + 0.35 * (m.load ?? 0.3));
+      return base * (0.65 + 0.35 * (m.load ?? 0.3)) + (m.chargeKW ?? 0); // + battery charger (sheddable)
     case 'school':
       return base * (0.35 + 0.65 * clamp(m.sheltered / m.capacity));
     case 'house':
-      return hour >= 0 && m.evacUntil > m.nowMin ? 0 : base * interp(HOUSE_CURVE, hour);
+      return hour >= 0 && m.evacUntil > m.nowMin ? 0 : base * houseFactor(hour);
   }
 }
 
@@ -87,9 +106,13 @@ export class TelemetryState {
   private schools: AgentRuntime[] = [];
   private houses: AgentRuntime[] = [];
   private nbrs = new Map<string, number[]>();
+  /** water station id → { hospitals fed, schools fed } (from the buried-pipe service topology) */
+  private waterDeps = new Map<string, { hospitals: AgentRuntime[]; schools: AgentRuntime[] }>();
+  /** telecom id → emergency stations / hospitals within 350 m */
+  private telecomDeps = new Map<string, { emergency: AgentRuntime[]; hospitals: AgentRuntime[] }>();
   private incidentsIn = new Map<string, number>();
 
-  init(list: AgentRuntime[], cells: GridCell[]): void {
+  init(list: AgentRuntime[], cells: GridCell[], water?: WaterNetwork): void {
     for (const a of list) {
       switch (a.s.kind) {
         case 'hospital': this.hospitals.push(a); break;
@@ -122,8 +145,19 @@ export class TelemetryState {
           }
       }
       this.nbrs.set(h.b.id, ids);
+      h.nbrs = ids;
     }
     for (const a of list) a.m.nowMin = 0;
+    // cross-utility dependencies (docs/MICROGRID.md §4)
+    for (const w of this.waters) {
+      const sid = waterSourceId(w.b.id);
+      const fed = (x: AgentRuntime) => water?.services[x.b.id]?.sourceId === sid;
+      this.waterDeps.set(w.b.id, { hospitals: this.hospitals.filter(fed), schools: this.schools.filter(fed) });
+    }
+    for (const t of this.telecoms) {
+      const near = (x: AgentRuntime) => Math.hypot(x.x - t.x, x.z - t.z) <= 350;
+      this.telecomDeps.set(t.b.id, { emergency: this.emergencies.filter(near), hospitals: this.hospitals.filter(near) });
+    }
     void cells;
   }
 
@@ -171,7 +205,14 @@ export class TelemetryState {
       const s = a.s;
       const prof = KIND_PROFILES[s.kind];
       s.demandKW = computeDemand(a, hour);
-      s.minSafeKW = s.demandKW * prof.minSafeFrac;
+      // sheddable buffer charging (part of demandKW): water refill pumping ~25%, telecom battery charger
+      let charge = 0;
+      if (s.demandKW > 0) {
+        if (s.kind === 'water') charge = a.m.reservoir < 99.5 ? 0.25 * s.demandKW : 0;
+        else if (s.kind === 'telecom') charge = Math.min(a.m.chargeKW ?? 0, s.demandKW);
+      }
+      s.minSafeKW = (s.demandKW - charge) * prof.minSafeFrac; // charging is never a safety need
+      this.updateStorage(a, charge);
       s.telemetry.distanceToImpactM = Math.round(a.impactM);
       if (a.down) s.urgency = 0;
       s.urgency = clamp(s.urgency);
@@ -188,7 +229,53 @@ export class TelemetryState {
       }
       s.expectedDamagePerHour = a.down ? 0 : base * (0.5 + s.urgency) * pop;
     }
+    // 5. cross-utility dependencies (needs every agent's expectedDamagePerHour of this step)
+    for (const w of this.waters) {
+      const d = this.waterDeps.get(w.b.id);
+      if (!d) continue;
+      const deps: string[] = [];
+      let dmg = 0;
+      for (const h of d.hospitals) { deps.push(h.b.id); dmg += 0.5 * h.s.expectedDamagePerHour; }
+      for (const sc of d.schools) if (sc.m.sheltered > 0) { deps.push(sc.b.id); dmg += 0.3 * sc.s.expectedDamagePerHour; }
+      this.setDependents(w, deps, dmg);
+    }
+    for (const t of this.telecoms) {
+      const d = this.telecomDeps.get(t.b.id);
+      if (!d) continue;
+      const deps: string[] = [];
+      let dmg = 0;
+      for (const e of d.emergency) { deps.push(e.b.id); dmg += 0.4 * e.s.expectedDamagePerHour; }
+      for (const h of d.hospitals) { deps.push(h.b.id); dmg += 0.1 * h.s.expectedDamagePerHour; }
+      this.setDependents(t, deps, dmg);
+    }
     void tMin;
+  }
+
+  private setDependents(a: AgentRuntime, deps: string[], dmg: number): void {
+    a.s.dependents = deps;
+    a.s.dependentDamagePerHour = a.down ? 0 : r1(dmg);
+    a.s.telemetry.dependentDamagePerHour = a.s.dependentDamagePerHour;
+  }
+
+  /** Utility buffer (docs/MICROGRID.md §5): reservoir / telecom battery / diesel + its sheddable charging kW. */
+  private updateStorage(a: AgentRuntime, chargeKW: number): void {
+    const s = a.s;
+    let kind: 'battery' | 'reservoir' | 'diesel';
+    let soc: number;
+    switch (s.kind) {
+      case 'water': kind = 'reservoir'; soc = a.m.reservoir; break;
+      case 'telecom': kind = 'battery'; soc = s.backup.capacityKWh > 0 ? (s.backup.remainingKWh / s.backup.capacityKWh) * 100 : 0; break;
+      case 'hospital':
+      case 'emergency': kind = 'diesel'; soc = s.backup.capacityKWh > 0 ? (s.backup.remainingKWh / s.backup.capacityKWh) * 100 : 0; break;
+      default: return;
+    }
+    if (!s.storage) s.storage = { kind, socPct: soc, chargeKW };
+    else {
+      s.storage.socPct = soc;
+      s.storage.chargeKW = chargeKW;
+    }
+    s.telemetry.chargeKW = r1(chargeKW);
+    s.telemetry.bufferPct = Math.round(soc);
   }
 
   // ─────────────────────────── impacts ───────────────────────────
@@ -328,7 +415,8 @@ export class TelemetryState {
     const pumps = Math.round(3 * eff);
     const pf = pumps / 3;
     const draw = 0.22 * interp(WATER_CURVE, ctx.hour);
-    m.reservoir = clamp(m.reservoir + pf * 0.4 - draw, 0, 100);
+    // refilling is the sheddable part of the load: only the granted share of the charging kW refills the reservoir
+    m.reservoir = clamp(m.reservoir + pf * 0.4 * a.chargedFrac - draw, 0, 100);
     // contamination: floods near the intake / pump house
     let near = 0;
     for (const c of ctx.badCells) {
@@ -365,6 +453,9 @@ export class TelemetryState {
     m.load = clamp(interp(TELECOM_CURVE, ctx.hour) + m.surge + 0.08 * downNear);
     const bk = s.backup;
     const battery = bk.capacityKWh > 0 ? bk.remainingKWh / bk.capacityKWh : 0;
+    // battery charger: up to 50% of the backup's max power while < 100% (sheddable; docs/MICROGRID.md §5)
+    const need = bk.capacityKWh - bk.remainingKWh;
+    m.chargeKW = a.down || need <= 1e-6 ? 0 : Math.min(0.5 * bk.maxKW, (need * 60) / 0.92);
     const powered = !a.down && (s.connected || a.backupDrawKW > 0 || a.servedFrac > 0.05);
     const t = s.telemetry;
     t.loadPct = Math.round(m.load * 100);
@@ -418,10 +509,10 @@ export class TelemetryState {
   private updateHouse(a: AgentRuntime, ctx: TelemetryCtx): void {
     const m = a.m;
     const s = a.s;
-    const ids = this.nbrs.get(a.b.id)!;
+    const ids = a.nbrs ?? this.nbrs.get(a.b.id)!;
     let permanent = false;
     let flooded = false;
-    for (const id of ids) {
+    if (ctx.badCells.length > 0) for (const id of ids) {
       const st = ctx.cells[id].status;
       if (st === 'destroyed' || st === 'burning') { permanent = true; break; }
       if (st === 'flooded') flooded = true;
@@ -435,7 +526,8 @@ export class TelemetryState {
       if (sc) sc.m.pending += m.occupants;
     } else if (!evacuated && m.evacCounted === 1) m.evacCounted = 0;
     const bk = s.backup;
-    const battery = bk.capacityKWh > 0 ? (bk.remainingKWh / bk.capacityKWh) * 100 : 0;
+    // a prosumer's DER battery replaces the house backup battery
+    const battery = s.der ? s.der.batteryPct : bk.capacityKWh > 0 ? (bk.remainingKWh / bk.capacityKWh) * 100 : 0;
     const powered = a.servedFrac > 0.5 && !a.down;
     const t = s.telemetry;
     t.occupants = m.occupants;

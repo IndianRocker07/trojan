@@ -2,19 +2,21 @@ import * as THREE from 'three';
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js';
 import { Emitter } from '../core/events';
 import { HALF_D, HALF_W, START_HOUR } from '../core/constants';
-import type { SimSnapshot } from '../core/types';
+import type { NegotiationReplay, ReplayRenderer, SimSnapshot } from '../core/types';
 import { BuildingBatch } from './batch';
 import { Effects } from './fx';
 import { buildGround, type Ground } from './ground';
 import { Labels } from './labels';
 import { PowerLines } from './lines';
 import { ModelLib } from './modelLib';
+import { NegotiationOverlay } from './negotiationOverlay';
 import { Overlays } from './overlays';
 import { WaterLayer } from './water';
 import { Picker } from './picking';
 import { Scatter } from './scatter';
+import { SolarLayer } from './solar';
 
-export type LayerName = 'grid' | 'power' | 'water' | 'flow' | 'labels' | 'status';
+export type LayerName = 'grid' | 'power' | 'water' | 'flow' | 'labels' | 'status' | 'negotiation';
 
 export interface WorldEvents extends Record<string, unknown> {
   select: string | null;
@@ -41,7 +43,7 @@ const smooth = (a: number, b: number, x: number) => {
 
 const SHADOW_SIZE = 4096;
 
-export class WorldView extends Emitter<WorldEvents> {
+export class WorldView extends Emitter<WorldEvents> implements ReplayRenderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
@@ -63,6 +65,8 @@ export class WorldView extends Emitter<WorldEvents> {
   private overlays: Overlays | null = null;
   private fx: Effects | null = null;
   private waterLayer: WaterLayer | null = null;
+  private solar: SolarLayer | null = null;
+  private overlay: NegotiationOverlay;
   private rings: THREE.LineSegments | null = null;
   private fade = { ground: 1, power: 1, water: 0 };
   private reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -73,7 +77,7 @@ export class WorldView extends Emitter<WorldEvents> {
   /** Resolves after the first build() has actually completed (models loaded, city in the scene). */
   readonly ready: Promise<void> = new Promise((r) => (this.resolveReady = r));
   private built = false;
-  private layers: Record<LayerName, boolean> = { grid: false, power: true, water: false, flow: true, labels: true, status: true };
+  private layers: Record<LayerName, boolean> = { grid: false, power: true, water: false, flow: true, labels: true, status: true, negotiation: true };
   private selected: string | null = null;
   private clock = new THREE.Clock();
   private t = 0;
@@ -135,6 +139,9 @@ export class WorldView extends Emitter<WorldEvents> {
       cell: (col, row) => this.emit('cellPick', { col, row }),
     });
     this.scene.add(this.picker.group, this.labels.group);
+    this.overlay = new NegotiationOverlay();
+    this.overlay.group.visible = this.layers.negotiation;
+    this.scene.add(this.overlay.group);
 
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(container);
@@ -177,6 +184,9 @@ export class WorldView extends Emitter<WorldEvents> {
 
     this.lines = new PowerLines(s, this.batch, this.lib);
     this.scene.add(this.lines.group);
+    // rooftop / campus solar is always visible; only its reverse-flow pulses follow the power layer (inside lines)
+    this.solar = new SolarLayer(infosAll.filter((b) => !!b.prosumer), this.batch.info, this.lib);
+    this.scene.add(this.solar.group);
     this.lines.setResolution(this.container.clientWidth, this.container.clientHeight, this.pr);
     this.lines.setFlowVisible(this.layers.flow);
 
@@ -198,6 +208,7 @@ export class WorldView extends Emitter<WorldEvents> {
     this.applyFade();
     this.pushFade();
 
+    this.overlay.setBuildings(this.batch.info);
     this.overlays = new Overlays(s.cells);
     this.scene.add(this.overlays.group);
     this.overlays.setGrid(this.layers.grid);
@@ -233,11 +244,18 @@ export class WorldView extends Emitter<WorldEvents> {
       this.applyTime(hour);
     }
     for (const b of Object.values(s.buildings)) this.batch.setStatus(b.id, b.status);
+    this.solar?.sync(s);
     this.lines!.sync(s);
     this.waterLayer?.sync(s);
     this.overlays!.sync(s);
     this.fx!.sync(s, this.batch.info);
     this.labels.sync(s.buildings);
+    this.overlay.sync(s);
+  }
+
+  /** Negotiation replay on the city (ReplayRenderer). replay null = live mode (latest final grants play once per new replay). */
+  showReplay(replay: NegotiationReplay | null, stageIndex: number, progress: number): void {
+    this.overlay.showReplay(replay, stageIndex, progress);
   }
 
   setPickMode(m: 'select' | 'cell'): void {
@@ -255,6 +273,7 @@ export class WorldView extends Emitter<WorldEvents> {
     else if (name === 'status') this.overlays?.setStatus(on);
     else if (name === 'flow') this.lines?.setFlowVisible(on);
     else if (name === 'power' || name === 'water') this.applyFade();
+    else if (name === 'negotiation') this.overlay.group.visible = on;
     else this.labels.setVisible(on);
   }
 
@@ -298,7 +317,7 @@ export class WorldView extends Emitter<WorldEvents> {
   }
 
   get stats() {
-    return { ...this._stats, hour: this.lastHour, fade: this.fade, pipes: this.waterLayer ? (this.waterLayer as any).recs.length : -1 };
+    return { ...this._stats, hour: this.lastHour, fade: this.fade, pipes: this.waterLayer ? (this.waterLayer as any).recs.length : -1, solar: this.solar?.stats ?? null, overlay: this.overlay.stats };
   }
 
   get buildingInfo() {
@@ -312,6 +331,7 @@ export class WorldView extends Emitter<WorldEvents> {
     this.teardown();
     this.picker.dispose();
     this.labels.dispose();
+    this.overlay.dispose();
     this.controls.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -328,6 +348,9 @@ export class WorldView extends Emitter<WorldEvents> {
     this.overlays?.dispose();
     this.fx?.dispose();
     this.waterLayer?.dispose();
+    this.solar?.dispose();
+    this.solar = null;
+    this.overlay.setBuildings(new Map());
     if (this.rings) {
       this.rings.geometry.dispose();
       (this.rings.material as THREE.Material).dispose();
@@ -347,6 +370,7 @@ export class WorldView extends Emitter<WorldEvents> {
     this.camera.updateProjectionMatrix();
     this.lines?.setResolution(w, h, this.pr);
     this.picker.setResolution(w, h, this.pr);
+    this.overlay.setViewport(h, this.camera.fov);
   }
 
   /** Sun / moon, sky colours and street lamps from the hour of day. */
@@ -449,6 +473,7 @@ export class WorldView extends Emitter<WorldEvents> {
     this.lines?.update(dt);
     this.overlays?.update(dt, this.t);
     this.fx?.update(dt, this.t);
+    this.overlay.update(dt);
     this.picker.update();
 
     const amp = this.fx?.shakeAmp ?? 0;

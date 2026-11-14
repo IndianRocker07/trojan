@@ -1,0 +1,136 @@
+/* Left rail overrides. Loaded by disasterRail.ts after styles.css and ux.css, so equal-specificity rules here win.
+   Desktop only (>= 960 px). Phone sheets keep the rules in styles.css and ux.css.
+   Two modes, set as classes on the column by disasterRail.ts:
+   - rail-fit:   the tall card takes the leftover height; its list is the only scroller (floor: 220 px list).
+   - rail-stack: the floor does not fit, so the card is its natural height and the column scrolls as one. */
+
+/* ───────── layer chips (replaces the four big toggles) ───────── */
+.hud .layer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.hud .layer-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 34px;
+  min-width: 0;
+  padding: 0 4px;
+  background: var(--surface);
+  color: var(--ink);
+  border: var(--border-w) solid var(--ink);
+  border-radius: var(--radius);
+  font: 600 13px/1 var(--font-body);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform var(--dur) var(--pop),
+    background-color var(--dur) var(--ease);
+}
+.hud .layer-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hud .layer-chip svg {
+  flex: none;
+}
+.hud .layer-chip:hover {
+  transform: translateY(-2px) rotate(-1deg);
+}
+.hud .layer-chip[aria-pressed='true'] {
+  background: var(--accent);
+}
+.hud .layers-panel .panel-body {
+  padding: 8px var(--pad);
+}
+
+/* ───────── Intensity / Radius: one compact block ───────── */
+.hud .dr-body > .sliders {
+  gap: 12px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.hud .dr-body > .pick-banner {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+/* ───────── the column ───────── */
+@media (min-width: 960px) {
+  .hud .rail-left {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 4px; /* room for the last card's 4 px hard shadow */
+    scrollbar-width: thin;
+    scrollbar-color: var(--ink) var(--surface-2);
+  }
+  .hud .rail-left::-webkit-scrollbar {
+    width: 10px;
+  }
+  .hud .rail-left::-webkit-scrollbar-track {
+    background: var(--surface-2);
+  }
+  .hud .rail-left::-webkit-scrollbar-thumb {
+    background: var(--ink);
+    border: 2px solid var(--surface-2);
+    border-radius: 999px;
+  }
+  .hud .rail-left.rail-stack {
+    scrollbar-gutter: stable;
+  }
+
+  /* fit: the card may shrink to its chrome plus the 220 px list floor (--rail-min is set by disasterRail.ts) */
+  .hud .rail-left.rail-fit > .disasters:not([data-collapsed='true']),
+  .hud .rail-left.rail-fit > .feed-panel {
+    flex: 1 1 0;
+    min-height: var(--rail-min, 220px);
+  }
+
+  /* stack: Disasters only, natural height, no inner scroll; the column is the scroller. The feed never stacks. */
+  .hud .rail-left.rail-stack > .disasters {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+  }
+  .hud .rail-left.rail-stack .dr-body,
+  .hud .rail-left.rail-stack .dr-scroll {
+    flex: none;
+    overflow: visible;
+  }
+  /* ───────── disaster list scroller ───────── */
+  /* The scrollbar sits in the card's 16 px right padding (the negative margin pushes it there), and the rows end on
+     the sliders' right edge, so a Place or Start button is never under the thumb. The gutter is reserved, so rows do
+     not shift on overflow. */
+  .hud .dr-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0 -12px 0 -4px;
+    padding: 4px 2px 12px 4px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--ink) var(--surface-2);
+  }
+  .hud .dr-scroll::-webkit-scrollbar {
+    width: 10px;
+  }
+  .hud .dr-scroll::-webkit-scrollbar-track {
+    background: var(--surface-2);
+  }
+  .hud .dr-scroll::-webkit-scrollbar-thumb {
+    background: var(--ink);
+    border: 2px solid var(--surface-2);
+    border-radius: 999px;
+  }
+  .hud .rail-left.rail-stack .dr-scroll {
+    margin: 0;
+    padding: 4px 0 12px 4px;
+    scrollbar-gutter: auto;
+  }
+}

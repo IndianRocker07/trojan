@@ -411,31 +411,90 @@ export function buildNetwork(cells: GridCell[], buildings: Record<string, Buildi
 // ───────────────────────── Connectivity & islands (§4.3) ─────────────────────────
 
 export interface Island {
+  /** rank of the component by its smallest node id (the engine remaps it to a persistent id) */
   id: number;
   generatorIds: string[]; // building ids of running generators in this island
   substationIds: string[];
   consumerIds: string[]; // building ids of connected consumers
+  /** smallest node id of the component (deterministic anchor) */
+  anchor: string;
+  /** no running generator: the island lives on prosumer sources alone */
+  microgrid: boolean;
 }
 
-const adjCache = new WeakMap<PowerNetwork, Map<string, string[]>>();
-function adjacency(net: PowerNetwork): Map<string, string[]> {
-  let a = adjCache.get(net);
-  if (!a) {
-    a = new Map();
-    for (const id of Object.keys(net.nodes)) a.set(id, []);
-    for (const e of Object.values(net.edges)) {
-      a.get(e.from)!.push(e.id);
-      a.get(e.to)!.push(e.id);
-    }
-    adjCache.set(net, a);
+interface Topo {
+  nodes: PowerNode[];
+  edges: PowerEdge[];
+  nodeIdx: Map<string, number>;
+  eFrom: Int32Array;
+  eTo: Int32Array;
+  /** CSR adjacency: edge indices incident to node i are adjE[adjOff[i] .. adjOff[i+1]) in edge order */
+  adjOff: Int32Array;
+  adjE: Int32Array;
+  /** CSR of the cells each edge crosses */
+  cellOff: Int32Array;
+  cellIds: Int32Array;
+  /** node -> alive-source building id lookups */
+  visited: Uint8Array;
+  queue: Int32Array;
+}
+const topoCache = new WeakMap<PowerNetwork, Topo>();
+function topology(net: PowerNetwork): Topo {
+  let t = topoCache.get(net);
+  if (!t) {
+    const nodes = Object.values(net.nodes);
+    const edges = Object.values(net.edges);
+    const nodeIdx = new Map<string, number>();
+    nodes.forEach((n, i) => nodeIdx.set(n.id, i));
+    const eFrom = new Int32Array(edges.length);
+    const eTo = new Int32Array(edges.length);
+    const deg = new Int32Array(nodes.length + 1);
+    let nc = 0;
+    edges.forEach((e, i) => {
+      eFrom[i] = nodeIdx.get(e.from)!;
+      eTo[i] = nodeIdx.get(e.to)!;
+      deg[eFrom[i]]++;
+      deg[eTo[i]]++;
+      nc += e.cells.length;
+    });
+    const adjOff = new Int32Array(nodes.length + 1);
+    for (let i = 0; i < nodes.length; i++) adjOff[i + 1] = adjOff[i] + deg[i];
+    const fill = adjOff.slice(0, nodes.length);
+    const adjE = new Int32Array(adjOff[nodes.length]);
+    const cellOff = new Int32Array(edges.length + 1);
+    const cellIds = new Int32Array(nc);
+    edges.forEach((e, i) => {
+      adjE[fill[eFrom[i]]++] = i;
+      adjE[fill[eTo[i]]++] = i;
+      cellOff[i + 1] = cellOff[i] + e.cells.length;
+      for (let k = 0; k < e.cells.length; k++) cellIds[cellOff[i] + k] = e.cells[k];
+    });
+    t = { nodes, edges, nodeIdx, eFrom, eTo, adjOff, adjE, cellOff, cellIds, visited: new Uint8Array(nodes.length), queue: new Int32Array(nodes.length) };
+    topoCache.set(net, t);
   }
-  return a;
+  return t;
+}
+
+export interface ComputedIslands {
+  islands: Island[];
+  /** building ids of every consumer reached from a source (built on first access) */
+  readonly connected: Set<string>;
+  /** per power-node index (see `powerNodeIndex`): 1 if the node lies in an island. Reused buffer: valid until the next call. */
+  reached: Uint8Array;
+}
+
+/** node id → index into `ComputedIslands.reached`. */
+export function powerNodeIndex(net: PowerNetwork): Map<string, number> {
+  return topology(net).nodeIdx;
 }
 
 /**
- * Recomputes `node.alive`, `edge.status` and the islands.
+ * Recomputes `node.alive`, `edge.status` and the islands: connected components of the live network that contain a
+ * source — a running generator OR a prosumer in `sources` (docs/MICROGRID.md §1). A component of consumers only stays dark.
+ * Islands are sorted by their smallest node id; `id` = rank in that order.
  * @param down       building ids that are not operational (any cell non-ok, or still recovering)
  * @param tripped    edge ids that tripped from overload (stay broken)
+ * @param sources    consumer building ids that can inject power (prosumers with an offer or a charged battery)
  */
 export function computeIslands(
   net: PowerNetwork,
@@ -444,19 +503,25 @@ export function computeIslands(
   generators: Record<string, GeneratorState>,
   down: ReadonlySet<string>,
   tripped: ReadonlySet<string>,
-): { islands: Island[]; connected: Set<string> } {
-  for (const n of Object.values(net.nodes)) {
+  sources: ReadonlySet<string> = new Set<string>(),
+): ComputedIslands {
+  const T = topology(net);
+  const { nodes, edges, eFrom, eTo, adjOff, adjE, cellOff, cellIds, visited, queue } = T;
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
     if (n.buildingId) n.alive = !down.has(n.buildingId);
     else {
       const st = cells[n.cell].status;
       n.alive = st === 'ok' || st === 'flooded';
     }
   }
-  for (const e of Object.values(net.edges)) {
-    let broken = tripped.has(e.id) || !net.nodes[e.from].alive || !net.nodes[e.to].alive;
+  const anyTripped = tripped.size > 0;
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i];
+    let broken = (anyTripped && tripped.has(e.id)) || !nodes[eFrom[i]].alive || !nodes[eTo[i]].alive;
     if (!broken) {
-      for (const c of e.cells) {
-        const st = cells[c].status;
+      for (let k = cellOff[i], end = cellOff[i + 1]; k < end; k++) {
+        const st = cells[cellIds[k]].status;
         if (st === 'destroyed' || st === 'burning') {
           broken = true;
           break;
@@ -465,35 +530,51 @@ export function computeIslands(
     }
     e.status = broken ? 'broken' : 'ok';
   }
-  const adj = adjacency(net);
-  const visited = new Set<string>();
+  visited.fill(0);
   const islands: Island[] = [];
-  const connected = new Set<string>();
-  for (const [gid, g] of Object.entries(generators)) {
-    if (g.status !== 'running') continue;
-    const start = net.nodes[buildings[gid].nodeId];
-    if (!start.alive || visited.has(start.id)) continue;
-    const isl: Island = { id: islands.length, generatorIds: [], substationIds: [], consumerIds: [] };
-    const q = [start.id];
-    visited.add(start.id);
-    for (let h = 0; h < q.length; h++) {
-      const n = net.nodes[q[h]];
+  const seeds: number[] = [];
+  for (const gid in generators) if (generators[gid].status === 'running') seeds.push(T.nodeIdx.get(buildings[gid].nodeId!)!);
+  for (const bid of sources) seeds.push(T.nodeIdx.get(buildings[bid].nodeId!)!);
+  for (const seed of seeds) {
+    const start = nodes[seed];
+    if (!start.alive || visited[seed]) continue;
+    const isl: Island = { id: 0, generatorIds: [], substationIds: [], consumerIds: [], anchor: start.id, microgrid: true };
+    let qn = 0;
+    queue[qn++] = seed;
+    visited[seed] = 1;
+    for (let h = 0; h < qn; h++) {
+      const ni = queue[h];
+      const n = nodes[ni];
+      if (n.id < isl.anchor) isl.anchor = n.id;
       if (n.kind === 'generator' && n.buildingId && generators[n.buildingId]?.status === 'running') isl.generatorIds.push(n.buildingId);
       else if (n.kind === 'substation') isl.substationIds.push(n.buildingId!);
-      else if (n.kind === 'consumer') {
-        isl.consumerIds.push(n.buildingId!);
-        connected.add(n.buildingId!);
-      }
-      for (const eid of adj.get(n.id)!) {
-        const e = net.edges[eid];
-        if (e.status !== 'ok') continue;
-        const other = e.from === n.id ? e.to : e.from;
-        if (visited.has(other)) continue;
-        visited.add(other);
-        q.push(other);
+      else if (n.kind === 'consumer') isl.consumerIds.push(n.buildingId!);
+      for (let k = adjOff[ni], end = adjOff[ni + 1]; k < end; k++) {
+        const ei = adjE[k];
+        if (edges[ei].status !== 'ok') continue;
+        const other = eFrom[ei] === ni ? eTo[ei] : eFrom[ei];
+        if (visited[other]) continue;
+        visited[other] = 1;
+        queue[qn++] = other;
       }
     }
+    isl.microgrid = isl.generatorIds.length === 0;
     islands.push(isl);
   }
-  return { islands, connected };
+  islands.sort((a, b) => (a.anchor < b.anchor ? -1 : a.anchor > b.anchor ? 1 : 0));
+  islands.forEach((isl, i) => {
+    isl.id = i;
+  });
+  let connectedSet: Set<string> | undefined;
+  return {
+    islands,
+    reached: visited,
+    get connected(): Set<string> {
+      if (!connectedSet) {
+        connectedSet = new Set<string>();
+        for (const isl of islands) for (const c of isl.consumerIds) connectedSet.add(c);
+      }
+      return connectedSet;
+    },
+  };
 }

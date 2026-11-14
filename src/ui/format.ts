@@ -20,6 +20,11 @@ export const KIND_LABEL: Record<BuildingKind, string> = {
   generator: 'Generator',
 };
 
+export function sunUp(tMin: number): boolean {
+  const hr = (START_HOUR + tMin / 60) % 24;
+  return hr >= 6 && hr < 18;
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 
 export function clockFromMin(tMin: number) {
@@ -97,6 +102,12 @@ const TELE: Record<string, TeleMeta> = {
   medicalDevice: { label: 'Medical device', type: 'bool' },
   emergencyRequestsPerHour: { label: 'Emergency requests', unit: '/h' },
   evacuated: { label: 'Evacuated', type: 'bool' },
+  solarKW: { label: 'Solar output', unit: 'kW' },
+  exportKW: { label: 'Exported to grid', unit: 'kW' },
+  curtailedKW: { label: 'Curtailed', unit: 'kW' },
+  chargeKW: { label: 'Buffer charging', unit: 'kW' },
+  bufferPct: { label: 'Buffer', type: 'pct' },
+  dependentDamagePerHour: { label: 'Dependent damage', unit: '/h' },
 };
 
 export function teleLabel(key: string): string {
@@ -132,3 +143,59 @@ export function fmtTele(key: string, v: number): string {
       return m?.unit ? `${num(v)} ${m.unit}` : num(v);
   }
 }
+
+// ───────────────────────── negotiation / safety helpers ─────────────────────────
+
+/** hh:mm of a sim minute (no day). */
+export const fmtClock = (tMin: number) => clockFromMin(tMin).text;
+
+/** Signed kW, e.g. "+120 kW" / "−1.20 MW". */
+export function fmtSignedKW(kw: number): string {
+  if (Math.abs(kw) < 0.5) return '0 kW';
+  return `${kw > 0 ? '+' : '−'}${fmtKW(Math.abs(kw))}`;
+}
+
+export const STANCE_LABEL: Record<string, string> = {
+  CRITICAL_HOLD: 'Critical hold',
+  PARTIAL_CONCESSION: 'Partial concession',
+  FULL_FLEX_SHED: 'Full flex shed',
+};
+/** Chip tone per stance (text always carries the meaning). */
+export const STANCE_TONE: Record<string, string> = { CRITICAL_HOLD: 'coral', PARTIAL_CONCESSION: 'yellow', FULL_FLEX_SHED: 'green' };
+
+export const MODE_LABEL: Record<string, string> = { active: 'Active', cooperating: 'Cooperating', idle: 'Idle' };
+export const MODE_TONE: Record<string, string> = { active: 'coral', cooperating: 'yellow', idle: '' };
+export const MODE_HINT: Record<string, string> = {
+  active: 'Affected by the crisis: negotiates with a full case.',
+  cooperating: 'Not affected, but asked to use less because its island is short.',
+  idle: 'Not affected and the island is fine. Takes its normal share.',
+};
+
+export const SOURCE_LABEL: Record<string, string> = { jev: 'Jev', heuristic: 'Heuristic', none: '—' };
+
+export const REGIME_LABEL: Record<string, string> = { surplus: 'Surplus', shortage: 'Shortage', triage: 'Triage' };
+export const REGIME_TONE: Record<string, string> = { surplus: 'green', shortage: 'yellow', triage: 'coral' };
+
+export const SEVERITY_LABEL: Record<string, string> = { info: 'Info', warn: 'Warning', crit: 'Critical' };
+
+export const CONTRACT_LABEL: Record<string, string> = {
+  open: 'Open',
+  repaying: 'Repaying',
+  honoured: 'Honoured',
+  defaulted: 'Defaulted',
+  cancelled: 'Cancelled',
+};
+
+export const LEDGER_LABEL: Record<string, string> = {
+  endowment: 'Endowment',
+  concession: 'Concession reward',
+  spend: 'Spent',
+  refund: 'Refund',
+  contract_stake: 'Contract stake',
+  contract_refund: 'Stake returned',
+  contract_forfeit: 'Stake forfeited',
+  decay: 'Decay',
+  replenish: 'Replenish',
+};
+
+export const fmtSigned = (n: number, digits = 1) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(digits)}`;
